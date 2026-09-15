@@ -164,9 +164,21 @@ AUTO_RESPONSE_RE = re.compile(
 )
 
 
+SGR_MOUSE_RE = re.compile(rb"\x1b\[<(\d+);\d+;\d+[Mm]")
+
+
+def _strip_mouse_hover(data):
+    """去掉「鼠标只是移动、没按任何键」的 SGR 报告：移动标志 32、按键位为 3（无按键）、不是滚轮。
+    agent 打开 1003 鼠标上报后，鼠标划过窗口就会持续产生这种报告（M8 实测）。点击、拖动、滚轮保留。"""
+    def repl(m):
+        code = int(m.group(1))
+        return b"" if code & 32 and code & 3 == 3 and not code & 64 else m.group(0)
+    return SGR_MOUSE_RE.sub(repl, data)
+
+
 def is_human_input(data):
-    """去掉终端自动发回的应答后还有东西，就算人工操作（按键、粘贴、鼠标）。"""
-    return bool(AUTO_RESPONSE_RE.sub(b"", data))
+    """去掉终端自动发回的应答和鼠标悬停移动后还有东西，就算人工操作（按键、粘贴、点击、拖动、滚轮）。"""
+    return bool(_strip_mouse_hover(AUTO_RESPONSE_RE.sub(b"", data)))
 
 
 # ---- 排查用

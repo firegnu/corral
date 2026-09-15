@@ -91,6 +91,18 @@ class HumanInputTest(unittest.TestCase):
             with self.subTest(data=data):
                 self.assertFalse(tm.is_human_input(data))
 
+    def test_mouse_motion_without_buttons_is_not_human(self):
+        # M8 实测：agent 打开 1003 鼠标上报后，鼠标只是划过窗口，终端就持续发 ESC[<35;x;yM
+        for data in (b"\x1b[<35;10;45M", b"\x1b[<39;1;1M", b"\x1b[<35;10;45M\x1b[<35;11;45M\x1b[I"):
+            with self.subTest(data=data):
+                self.assertFalse(tm.is_human_input(data))
+
+    def test_mouse_buttons_drag_and_wheel_are_human(self):
+        for data in (b"\x1b[<0;10;5M", b"\x1b[<0;10;5m", b"\x1b[<32;10;5M", b"\x1b[<64;10;5M", b"\x1b[<65;10;5M",
+                     b"\x1b[<35;10;45Ma"):
+            with self.subTest(data=data):
+                self.assertTrue(tm.is_human_input(data))
+
     def test_keys_and_mouse_are_human(self):
         for data in (b"a", b"\r", b"\x1b", b"\x1b[A", b"\x1b[97;5u", b"\x1b[<0;10;5M", b"\x1b[I" + b"x",
                      "中".encode()):

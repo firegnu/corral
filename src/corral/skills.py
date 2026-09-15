@@ -1,6 +1,8 @@
-"""corral install-skills：经人确认后，把 agent skill 写进 Claude Code 和 Codex 的全局 skill 目录。
+"""corral install-skills：经人确认后，把 agent skill 写进 Claude Code 和 Codex 的 skill 目录。
 
-只写 <配置目录>/skills/corral/SKILL.md 这两个文件；删除时只删带 corral 标记的文件。默认不安装（DESIGN 13.3、14）。
+全局：Claude Code ${CLAUDE_CONFIG_DIR:-~/.claude}/skills/corral/SKILL.md，Codex ~/.agents/skills/corral/SKILL.md（官方文档位置）；
+项目级（--project）：<目录>/.claude/skills/ 和 <目录>/.agents/skills/。
+只写这两个文件；删除时只删带 corral 标记的文件。默认不安装（DESIGN 13.3、14）。
 """
 import os
 import shutil
@@ -13,11 +15,15 @@ MARKER = "<!-- corral-skill:"
 AGENTS = ("claude", "codex")
 
 
-def skill_path(agent):
+def skill_path(agent, project=None):
+    if project is not None:
+        sub = ".claude" if agent == "claude" else ".agents"
+        return os.path.join(project, sub, "skills", "corral", "SKILL.md")
     if agent == "claude":
         base = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
     else:
-        base = os.environ.get("CODEX_HOME") or os.path.join(os.path.expanduser("~"), ".codex")
+        # Codex 官方文档的用户级位置；实测 0.154 也读 ~/.codex/skills，只装文档位置这一处
+        base = os.path.join(os.path.expanduser("~"), ".agents")
     return os.path.join(base, "skills", "corral", "SKILL.md")
 
 
@@ -29,12 +35,12 @@ def _read(path):
         return None
 
 
-def plan(target, remove):
+def plan(target, remove, project=None):
     agents = AGENTS if target == "all" else (target,)
     source = _read(SOURCE)
     items = []
     for agent in agents:
-        path = skill_path(agent)
+        path = skill_path(agent, project)
         current = _read(path)
         if remove:
             status = "absent" if current is None else ("remove" if MARKER in current else "foreign")
@@ -71,8 +77,12 @@ def _confirm(items, remove):
     return answer in ("y", "yes")
 
 
-def run(target, remove, dry_run, yes):
-    items, source = plan(target, remove)
+def run(target, remove, dry_run, yes, project=None):
+    if project is not None:
+        project = os.path.abspath(project)
+        if not os.path.isdir(project):
+            raise CorralError(EXIT_ERROR, "bad_project", f"no such directory: {project}")
+    items, source = plan(target, remove, project)
     warnings = []
     if not remove and shutil.which("corral") is None:
         warnings.append("corral is not on PATH: the skill will tell agents that corral is not installed")

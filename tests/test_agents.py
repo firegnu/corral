@@ -48,8 +48,8 @@ class ClaudeTest(unittest.TestCase):
 
     def test_prompt_is_last_argument(self):
         out = self.build(["claude", "--model", "haiku"], prompt="first line\nsecond")
-        self.assertEqual(out[-1], "first line\nsecond")
-        self.assertEqual(out[-3:-1], ["--model", "haiku"])
+        self.assertEqual(out[-2:], ["--", "first line\nsecond"])  # -- 防止被多值选项吞掉
+        self.assertEqual(out[-4:-2], ["--model", "haiku"])
 
 
 class CodexTest(unittest.TestCase):
@@ -75,7 +75,7 @@ class CodexTest(unittest.TestCase):
 
     def test_prompt_is_last_argument(self):
         out = self.build(["codex", "--yolo"], prompt="hello")
-        self.assertEqual(out[-2:], ["--yolo", "hello"])
+        self.assertEqual(out[-3:], ["--yolo", "--", "hello"])
 
 
 if __name__ == "__main__":

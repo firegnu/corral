@@ -1,6 +1,6 @@
 ---
 name: corral
-description: "Open another interactive coding agent (Claude Code or Codex) with corral, hand it a question or task, wait for its answer and read the reply. Use when the user says things like 开一个 Claude Code 看一下, 开一个 Codex 看一下, 交给另一个 agent, 让另一个 agent 帮忙看看, ask another agent, delegate to another agent, get a second opinion from Claude Code or Codex."
+description: "Start a separate, new Claude Code or Codex agent session with the corral command, hand it the question, wait for its answer and bring back its reply. Use whenever the user asks to open, start or spin up another agent to look at something, e.g. 开一个 Claude Code 看一下, 开一个 Codex 看一下, 交给另一个 agent, 让另一个 agent 帮忙看看, ask another agent, delegate to another agent, get a second opinion from Claude Code or Codex. The user wants a separate interactive agent session they can attach to, not a built-in subagent or Agent/Task tool, and not your own answer, even if you are Claude Code or Codex yourself."
 ---
 <!-- corral-skill: written by `corral install-skills`; `corral install-skills --remove` deletes it -->
 
@@ -17,7 +17,7 @@ corral reply <名字>
 corral stop <名字>
 ```
 
-1. **start**：输出里的 `name` 就是之后用的名字（`--unique` 会补后缀）。第一句话必须用 `--prompt` 带上。要开 Codex，把最后换成 `-- codex --yolo`。
+1. **start**：输出里的 `name` 就是之后用的名字（`--unique` 会补后缀）。第一句话必须用 `--prompt` 带上。要开 Codex，把最后换成 `-- codex --yolo`。需要省钱时，调用方可以自己在 agent 命令后面传模型参数。
 2. **wait**：你的 shell 工具有超时，所以每次只等 90 秒；退出码 4 就再运行一次，直到返回。看输出里的 `result`：
    - `idle`：这一轮结束，去 reply。
    - `blocked`：对方弹了权限框或提问框。不要替它回答，告诉用户运行 `corral attach <名字>` 去处理，处理完再 wait。

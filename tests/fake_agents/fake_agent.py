@@ -18,6 +18,8 @@
   FAKE_SCRIPT      JSON 字符串列表：启动后依次自动提交，每条等上一轮结束
   FAKE_SWAP_FIRST  1 = Codex 第一次提交时先写输入事件、再写会话开始事件
   FAKE_IGNORE_CTRL_C  1 = 不理 Ctrl-C（测 stop 升级到信号）
+  FAKE_IGNORE_PROMPT  1 = 启动参数里的首句不提交（测「首句没提交时不能报 idle」）
+  FAKE_SHUTDOWN_DELAY 秒数：连按两次 Ctrl-C 后先「收尾」这么久再退出（真 Codex 实测要好几秒）
 """
 import json
 import os
@@ -45,20 +47,31 @@ def log(obj):
 
 def parse_args(args):
     hooks, bypass, positional = {}, False, []
-    it = iter(args)
-    for a in it:
+    i = 0
+    while i < len(args):
+        a = args[i]
+        i += 1
         if a == "--settings":
-            for ev, entries in json.loads(next(it)).get("hooks", {}).items():
+            for ev, entries in json.loads(args[i]).get("hooks", {}).items():
                 hooks.setdefault(ev, []).extend(h["command"] for e in entries for h in e["hooks"])
+            i += 1
         elif a == "-c":
-            value = next(it)
+            value = args[i]
+            i += 1
             if value.startswith("hooks."):
                 for ev, entries in tomllib.loads(value)["hooks"].items():
                     hooks.setdefault(ev, []).extend(h["command"] for e in entries for h in e["hooks"])
         elif a == "--dangerously-bypass-hook-trust":
             bypass = True
         elif a in ("-m", "--model"):
-            next(it)
+            i += 1
+        elif a == "--allowedTools":
+            # 和真 Claude Code 一样是多值选项：吞掉后面所有不以 - 开头的参数
+            while i < len(args) and not args[i].startswith("-"):
+                i += 1
+        elif a == "--":
+            positional.extend(args[i:])
+            break
         elif not a.startswith("-"):
             positional.append(a)
     return hooks, bypass, (positional[-1] if positional else None)
@@ -229,6 +242,8 @@ class Agent:
         now = time.time()
         if now - self.ctrl_c_at < 2.0:
             log({"quit": "ctrl-c twice"})
+            self.out("\r\nShutting down...\r\n")
+            time.sleep(float(os.environ.get("FAKE_SHUTDOWN_DELAY", "0")))
             sys.exit(0)
         self.ctrl_c_at = now
         self.working, self.spinning, self.job = False, False, []
@@ -246,7 +261,7 @@ class Agent:
             if not CODEX:
                 self.fire("SessionStart", source="startup")
                 self.session_started = True
-            if self.first_prompt is not None:
+            if self.first_prompt is not None and os.environ.get("FAKE_IGNORE_PROMPT") != "1":
                 self.submit(self.first_prompt)
             frame = 0
             while True:

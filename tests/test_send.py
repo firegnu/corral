@@ -116,6 +116,13 @@ class InputSourceTest(AgentTestCase):
         w.type(b"typed by human\r")
         self.states_until("demo/c", lambda s: s.get("last_input_source") == "human" and s["state"] == "idle")
 
+    def test_start_prompt_counts_as_send(self):
+        code, out = support.run_cli(["start", "demo/p", "--cwd", self.home, "--prompt", "reply:first",
+                                     "--", support.fake_agent("codex")], home=self.home)
+        self.assertEqual(code, 0, out)
+        st = self.cli("wait", "demo/p")[1]
+        self.assertEqual((st["result"], st["last_input_source"]), ("idle", "send"))
+
     def test_agent_started_turn(self):
         self.start("demo/c", "claude", script=["selfturn"])
         self.states_until("demo/c", lambda s: s.get("last_input_source") == "agent")
@@ -208,6 +215,26 @@ class KeysReplyPromptTest(AgentTestCase):
         self.assertEqual(code, 0, out)
         code, st = self.cli("wait", "demo/c")
         self.assertEqual(self.cli("reply", "demo/c")[1]["text"], "first")
+
+    def test_prompt_not_swallowed_by_variadic_option(self):
+        # M8 实测：真 Claude Code 的 --allowedTools 接多个值，追加在最后的首句会被它吞掉
+        code, out = support.run_cli(["start", "demo/v", "--cwd", self.home, "--prompt", "reply:kept",
+                                     "--", support.fake_agent("claude"), "--allowedTools", "Bash(x:*)"],
+                                    home=self.home)
+        self.assertEqual(code, 0, out)
+        code, st = self.cli("wait", "demo/v", "--timeout", "15")
+        self.assertEqual((code, st.get("result")), (0, "idle"), st)
+        self.assertEqual(self.cli("reply", "demo/v")[1].get("text"), "kept")
+
+    def test_unsubmitted_prompt_is_starting_not_idle(self):
+        code, out = support.run_cli(["start", "demo/u", "--cwd", self.home, "--prompt", "reply:never",
+                                     "--env", "FAKE_IGNORE_PROMPT=1", "--", support.fake_agent("claude")],
+                                    home=self.home)
+        self.assertEqual(code, 0, out)
+        time.sleep(1.0)
+        self.assertEqual(self.status("demo/u")["state"], "starting")
+        code, st = self.cli("wait", "demo/u", "--timeout", "2")
+        self.assertEqual((code, st["state"]), (errors.EXIT_TIMEOUT, "starting"))
 
     def test_prompt_with_unknown_agent_rejected(self):
         code, out = self.cli("start", "demo/s", "--prompt", "hi", "--", "sleep", "5")

@@ -77,8 +77,9 @@ herdr 是两套东西：常驻后台服务（工作区、标签、窗格、按�
   - **最后一次输出的时间**；
   - agent 设置的**终端标题**（标准终端功能，不是某家 agent 的界面内容）；
   - agent 打开的**终端模式**（DEC 私有模式如粘贴模式、焦点上报、备用屏幕、鼠标，以及 kitty 键盘协议）：新窗口接入时先重放，否则新窗口不知道这些模式；
-  - **最后一次人工按键的时间**：接入窗口里可打字的那个人最后一次按键的时间（`send` 据此避让，见 5.2）。**终端自动发出的回应不算人工按键**：焦点切入 / 切出（`ESC[I` / `ESC[O`）、光标位置报告、设备属性报告、OSC 查询的回答等，是 agent 打开了相应模式或发了查询后由终端自动回的，人只是切了一下窗口焦点也会产生。鼠标点击、滚轮算人工操作。
+  - **最后一次人工按键的时间**：接入窗口里可打字的那个人最后一次按键的时间（`send` 据此避让，见 5.2）。**终端自动发出的回应不算人工按键**：焦点切入 / 切出（`ESC[I` / `ESC[O`）、光标位置报告、设备属性报告、OSC 查询的回答等，是 agent 打开了相应模式或发了查询后由终端自动回的，人只是切了一下窗口焦点也会产生。**鼠标只是移动、没按键也不算**：agent 打开任意移动鼠标上报（1003，Claude Code 全屏渲染时会开）后，鼠标划过窗口就会持续产生位置报告，M8 实测因此让 `send` 一直被拒。鼠标点击、拖动、滚轮算人工操作。
 - agent 拿到**默认的信号处理和空的信号屏蔽**：「忽略」会随 exec 继承（Python 启动时忽略 SIGPIPE，栏位自己忽略 SIGHUP），而 shell 无法恢复启动时就被忽略的信号，不重置的话 agent 里的管道和挂断处理都会异常（M1 实测：不重置时 agent 收到 SIGPIPE、SIGHUP 都不退出）。
+- **任何一个接入者或请求出意外，只断开那一个连接，栏位照常运行**：栏位一崩，agent 会被一起杀掉。M8 实测踩过：macOS 的 kqueue 把同一个 socket 的可写、可读拆成两条事件返回，杀掉接入窗口时先写失败断开了连接，紧接着处理可读就对已关闭的 socket 读，栏位崩溃、Codex 被杀。
 - 同一个 agent 的写入由栏位串行处理，两段文字不会交错。
 - agent 退出：栏位记下退出码、删掉自己的 socket 后退出。
 - **写好之后基本不改**：corral 升级时新版本只对之后打开的 agent 生效，正在跑的栏位不替换、不杀。栏位启动时一次性加载完所有要用的模块，之后不再从磁盘读 corral 的代码；和其他版本的配合见 5.4。
@@ -292,7 +293,7 @@ agent A
 - **按 Esc 打断没有任何事件**，状态停在 working。可用信号是「最后一次输出的时间」：实测干活时（生成文字、跑 20 s 的工具）输出最长停顿不到 1 s（界面转圈一直刷新），打断后输出停住。`status` 报出这个时间；调用方用 `corral wait --quiet N` 等：working 时连续 N 秒没输出就返回 `stopped-quiet`（见 5.2）。
 - 收到 SIGHUP 约 1 s 正常退出。
 - 后台命令结束后会自己注入一条通知作为输入，开新一轮（见 5.2「idle 只表示这一轮结束」）。
-- 首句：`claude … "<首句>"`。
+- 首句：`claude … -- "<首句>"`。**首句前必须加 `--`**：`--allowedTools` 这类选项接多个值，追加在最后的首句会被它当成自己的值吞掉，agent 起来后输入框是空的（M8 实测）。用 `--prompt` 启动时，首句的输入事件出现之前状态保持 `starting`，不报 `idle`。
 
 **Codex**
 - 钩子来源：系统层、托管层、用户层、项目层（仅受信任项目）、插件，以及启动参数 `-c`（Codex 把它当成单独一层）。所有来源一起运行：实测项目层 `hooks.json`、项目层 `config.toml` 的 `[[hooks.Stop]]` 和 `-c hooks.Stop=…` 同时触发，`-c` 不会顶掉同名配置。
@@ -300,7 +301,7 @@ agent A
 - **会话开始事件要到第一次提交输入才触发**。启动后、第一句之前没有任何事件，状态一直是 starting，和「卡在信任框」分不出来，所以第一句话必须用 `corral start --prompt`（`codex … "<首句>"`）。实测启动后很快用按键送首句，文字进了输入框但回车没提交。
 - 第一次提交时，会话开始和输入事件相隔几十毫秒先后到，`wait` 要求状态稳定一小段才返回。
 - 按 Esc 打断有专门的 `Interrupt` 事件，0.1 s 内到。
-- **不理 SIGHUP**（空闲时和信任框里都一样），`stop` 要用 Codex 自己的退出方式。
+- **不理 SIGHUP**（空闲时和信任框里都一样），`stop` 要用 Codex 自己的退出方式：连按两次 Ctrl-C，界面显示「Shutting down...」后正常退出（退出码 0），但收尾要好几秒（M8 实测：工具被打断后 7.6 秒），所以之后要等足够久（20 秒）才升级到 SIGTERM；还没开始会话时按 Ctrl-C 则直接被 SIGINT 结束。
 - 信任：全局信任 `/` 对子目录不生效；`-c 'projects."…".trust_level=…'` 覆盖无效，照样弹信任框。
 
 **不认识的 agent**：也能打开和接入，状态报「未知」。
@@ -354,7 +355,8 @@ corral 自带一份给 agent 看的使用说明，只讲命令怎么用。任何
 - `corral guide` 打印完整使用说明。
 - 一份 agent skill（Claude Code 和 Codex 的 skill 格式相同，共用一份）：触发描述写中英文的常见说法（「开一个 Claude Code 看一下」「交给另一个 agent」「delegate to another agent」…），正文只放要点（自检 corral 是否可用、标准四步、退出码处理、规矩），完整说明指向 `corral guide`。测试核对 skill 里的命令和退出码与实现一致。
 - agent 自己的 shell 工具有超时（Claude Code 的 Bash 默认 2 分钟），所以 skill 让 agent 用短超时 `wait` 并循环，不要一次等 10 分钟。
-- **安装要人明确同意**：`corral install-skills` 列出要写的路径（`~/.claude/skills/corral/SKILL.md`、`~/.codex/skills/corral/SKILL.md`，遵循 `CLAUDE_CONFIG_DIR`、`CODEX_HOME`）和每个路径的状态，确认后才写；不在终端里运行时必须显式 `--yes`；`--remove` 只删 corral 自己写的文件。corral 不默认安装。
+- **安装要人明确同意**：`corral install-skills` 列出要写的路径（`~/.claude/skills/corral/SKILL.md`，遵循 `CLAUDE_CONFIG_DIR`；Codex 按官方文档写 `~/.agents/skills/corral/SKILL.md`）和每个路径的状态，确认后才写；不在终端里运行时必须显式 `--yes`；`--remove` 只删 corral 自己写的文件；`--project <目录>` 改写项目级位置（Claude Code `<目录>/.claude/skills/`，Codex `<目录>/.agents/skills/`），只对以该目录为工作目录的 agent 生效，适合试用。corral 不默认安装。
+- 两家的加载位置（2026-09-15 查官方文档）：Claude Code 个人 `~/.claude/skills/`、项目 `.claude/skills/`（普通 skill 不需要信任框，带插件清单的才需要）；Codex 项目 `.agents/skills/`（当前目录、上层目录直到仓库根），用户级文档写的是 `~/.agents/skills/`；M8 实测 Codex 0.154 `~/.codex/skills/` 和 `~/.agents/skills/` 两处都读，决定只装文档位置 `~/.agents/skills/`。
 - 不做 MCP：两家 agent 都能直接跑命令；MCP 要改全局配置，每个会话还多一个进程。
 
 ## 14. 设计约束

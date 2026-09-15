@@ -40,6 +40,14 @@ class StopTest(AgentTestCase):
         self.assertEqual((out["stopped_by"], out["exit_code"]), ("keys", 0))
         self.assertLess(time.time() - t0, 4)
 
+    def test_codex_slow_graceful_shutdown_is_not_killed(self):
+        # M8 实测：真 Codex 连按两次 Ctrl-C 后要收尾 7 秒多才退出，不能 5 秒就发 SIGTERM
+        self.start("demo/x", "codex", script=["reply:ready"], extra_env=["FAKE_SHUTDOWN_DELAY=8"])
+        self.states_until("demo/x", lambda s: s.get("last_event") == "Stop")
+        code, out = self.cli("stop", "demo/x")
+        self.assertEqual(code, 0, out)
+        self.assertEqual((out["stopped_by"], out["exit_code"]), ("keys", 0))
+
     def test_escalates_to_term_when_quit_keys_ignored(self):
         self.start("demo/x", "codex", extra_env=["FAKE_IGNORE_CTRL_C=1"])
         time.sleep(0.5)

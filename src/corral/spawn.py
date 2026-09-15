@@ -8,7 +8,7 @@ import subprocess
 import time
 import uuid
 
-from corral import __version__, agents, env, paths, pen
+from corral import __version__, agents, env, events, paths, pen
 from corral.errors import EXIT_ERROR, EXIT_EXISTS, CorralError
 
 READY_TIMEOUT = 15.0
@@ -136,7 +136,7 @@ def start(name, cwd, argv, unique=False, env_pairs=(), prompt=None):
     agent_argv = adapter.build(list(argv), hook_path, prompt) if adapter else list(argv)
     cfg = {"name": name, "instance": instance, "dir": d, "cwd": cwd, "argv": agent_argv,
            "kind": adapter.kind if adapter else os.path.basename(argv[0]), "env": agent_env,
-           "version": __version__}
+           "version": __version__, "prompt_digest": events.digest(prompt) if prompt is not None else None}
 
     ready_r, ready_w = os.pipe()
     child = os.fork()

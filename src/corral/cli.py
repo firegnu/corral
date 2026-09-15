@@ -79,6 +79,7 @@ def build_parser():
     s.add_argument("--remove", action="store_true")
     s.add_argument("--dry-run", action="store_true")
     s.add_argument("--yes", action="store_true")
+    s.add_argument("--project")
     return p
 
 
@@ -114,7 +115,10 @@ def agent_status(name):
     if m.get("kind") in agents.ADAPTERS:
         snap = events.read(paths.pen_dir(name), st["instance"], m.get("cwd"))
         last_input = snap["inputs"][-1] if snap["inputs"] else None
-        result.update(state=snap["state"], last_tool=snap["last_tool"], turn_started=snap["turn_started"],
+        state = snap["state"]
+        if m.get("has_prompt") and snap["input_count"] == 0 and state == "idle":
+            state = "starting"  # 用 --prompt 启动、首句还没提交：不能让调用方以为已经答完
+        result.update(state=state, last_tool=snap["last_tool"], turn_started=snap["turn_started"],
                       last_event=snap["last_event"], last_event_at=snap["last_event_t"],
                       last_input_at=last_input and last_input["t"],
                       last_input_source=input_source(last_input, st))
@@ -280,7 +284,7 @@ def cmd_guide(args):
 
 
 def cmd_install_skills(args):
-    result, code = skills.run(args.target, args.remove, args.dry_run, args.yes)
+    result, code = skills.run(args.target, args.remove, args.dry_run, args.yes, project=args.project)
     emit(result)
     return code
 

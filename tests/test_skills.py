@@ -80,10 +80,11 @@ class InstallSkillsTest(unittest.TestCase):
     def setUp(self):
         self.root = support.short_tmpdir()
         self.claude = os.path.join(self.root, "claude-config")
-        self.codex = os.path.join(self.root, "codex-home")
-        self.env = {"CLAUDE_CONFIG_DIR": self.claude, "CODEX_HOME": self.codex, "PATH": "/usr/bin:/bin"}
+        self.env = {"CLAUDE_CONFIG_DIR": self.claude, "HOME": self.root, "CODEX_HOME": os.path.join(self.root, "ignored"),
+                    "PATH": "/usr/bin:/bin"}
         self.claude_skill = os.path.join(self.claude, "skills", "corral", "SKILL.md")
-        self.codex_skill = os.path.join(self.codex, "skills", "corral", "SKILL.md")
+        # Codex 按官方文档读 ~/.agents/skills；CODEX_HOME 不影响这个位置
+        self.codex_skill = os.path.join(self.root, ".agents", "skills", "corral", "SKILL.md")
 
     def run_install(self, *args, env=None):
         return support.run_cli(["install-skills", *args], env={**self.env, **(env or {})})
@@ -109,8 +110,8 @@ class InstallSkillsTest(unittest.TestCase):
     def test_yes_writes_exactly_two_files(self):
         code, out = self.run_install("--yes")
         self.assertEqual((code, out["written"]), (0, True))
-        self.assertEqual(self.files_under_root(), ["claude-config/skills/corral/SKILL.md",
-                                                   "codex-home/skills/corral/SKILL.md"])
+        self.assertEqual(self.files_under_root(), [".agents/skills/corral/SKILL.md",
+                                                   "claude-config/skills/corral/SKILL.md"])
         for path in (self.claude_skill, self.codex_skill):
             self.assertEqual(read(path), read(SKILL))
         code, out = self.run_install("--yes")
@@ -160,6 +161,24 @@ class InstallSkillsTest(unittest.TestCase):
         os.symlink(support.BIN, os.path.join(bindir, "corral"))
         code, out = self.run_install("--dry-run", env={"PATH": f"{bindir}:/usr/bin:/bin"})
         self.assertFalse(any("PATH" in w for w in out["warnings"]))
+
+    def test_project_level_writes_only_project_paths(self):
+        project = os.path.join(self.root, "work")
+        os.makedirs(project)
+        code, out = self.run_install("--project", project, "--yes")
+        self.assertEqual((code, out["written"]), (0, True), out)
+        self.assertEqual({i["path"] for i in out["items"]},
+                         {os.path.join(project, ".claude", "skills", "corral", "SKILL.md"),
+                          os.path.join(project, ".agents", "skills", "corral", "SKILL.md")})
+        self.assertEqual(self.files_under_root(), ["work/.agents/skills/corral/SKILL.md",
+                                                   "work/.claude/skills/corral/SKILL.md"])
+        code, out = self.run_install("--project", project, "--target", "codex", "--remove", "--yes")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.files_under_root(), ["work/.claude/skills/corral/SKILL.md"])
+
+    def test_project_must_exist(self):
+        code, out = self.run_install("--project", os.path.join(self.root, "missing"), "--dry-run")
+        self.assertEqual((code, out["error"]), (errors.EXIT_ERROR, "bad_project"))
 
     def test_output_fields_documented(self):
         documented = set(command_sections(read(CONTRACT))["install-skills"]["输出字段"])

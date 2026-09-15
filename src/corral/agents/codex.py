@@ -24,8 +24,9 @@ CTRL_C = base64.b64encode(b"\x03").decode()
 
 class Codex:
     kind = "codex"
-    # 实测不理 SIGHUP；先用它自己的退出按键（连按两次 Ctrl-C，M8 用真 Codex 确认），不行再终止
-    quit_steps = ({"keys": CTRL_C, "wait": 0.3}, {"keys": CTRL_C, "wait": 5}, {"signal": "TERM", "wait": 3})
+    # 实测不理 SIGHUP。连按两次 Ctrl-C 会显示「Shutting down...」并正常退出（退出码 0），
+    # 但收尾要好几秒（M8 实测 7.6 秒），所以等 20 秒再终止，免得打断它收尾
+    quit_steps = ({"keys": CTRL_C, "wait": 0.3}, {"keys": CTRL_C, "wait": 20}, {"signal": "TERM", "wait": 3})
 
     def build(self, argv, hook_path, prompt=None):
         extra = []
@@ -35,5 +36,5 @@ class Codex:
                             f"timeout={timeout}}}]}}]"]
         out = [argv[0], *extra, "--dangerously-bypass-hook-trust", *argv[1:]]
         if prompt is not None:
-            out.append(prompt)
+            out += ["--", prompt]  # 同 Claude Code：防止被多值选项吞掉
         return out

@@ -19,7 +19,7 @@
 ## 取值
 
 - 状态值：`starting` `idle` `working` `blocked` `exiting` `unknown`
-  - `starting`：还没收到会话开始事件（启动中，或卡在信任框等对话框里；Codex 在第一次提交输入前一直是这个状态）。
+  - `starting`：还没收到会话开始事件（启动中，或卡在信任框等对话框里；Codex 在第一次提交输入前一直是这个状态）；或者用 `--prompt` 启动、首句还没提交。
   - `idle`：这一轮结束。**只表示这一轮结束，不代表 agent 不会再动**：agent 可能自己开新一轮（例如后台命令结束后自己注入一条输入），看 `last_input_source`。
   - `working`：收到输入、正在调用工具。
   - `blocked`：弹出了权限框或提问框，等人处理。
@@ -53,7 +53,7 @@
 - 选项：`--force` `--timeout`
 - 输出字段：`ok` `name` `instance` `confirmed` `latency`
 - 送一段话（可以多行）并按回车，**以 agent 的输入事件里的文字和送出的一致为送达确认**，`confirmed: true`。`--timeout` 默认 15 秒。
-- 拒绝：状态不是 `idle` → 退出码 7（附 `state`）；最近 30 秒内有人在接入窗口里操作过（按键、粘贴、鼠标；终端自动发回的应答不算）→ 退出码 8（附 `last_human_input`），稍后重试或加 `--force`。只是开着窗口看、没操作，照常送。
+- 拒绝：状态不是 `idle` → 退出码 7（附 `state`）；最近 30 秒内有人在接入窗口里操作过（按键、粘贴、鼠标点击 / 拖动 / 滚轮；终端自动发回的应答和鼠标只是移动不算）→ 退出码 8（附 `last_human_input`），稍后重试或加 `--force`。只是开着窗口看、没操作，照常送。
 - 超时没确认 → 退出码 3。**corral 不补发任何按键**：此刻屏幕上可能是菜单或对话框，补发的回车可能被当成选择。
 - 不认识的 agent：照样写入并回车，`confirmed: false`，不检查状态。
 
@@ -125,18 +125,19 @@
 - 选项：`--timeout`
 - 输出字段：`ok` `name` `instance` `exit_code` `stopped_by`
 - 先用这种 agent 自己的退出方式，不行再依次升级到信号，最后总是 SIGKILL；**等到 agent 真正退出、名字可以立刻重新 start 才返回**。`stopped_by` 是最后执行到的一步：`keys`、`SIGHUP`、`SIGTERM`、`SIGKILL`。`exit_code` 为负数表示被信号结束。
-- 各种 agent 的顺序：Claude Code：SIGHUP → SIGTERM；Codex：连按两次 Ctrl-C → SIGTERM（Codex 不理 SIGHUP）；不认识的：SIGHUP → SIGTERM。
+- 各种 agent 的顺序：Claude Code：SIGHUP → SIGTERM；Codex：连按两次 Ctrl-C，等它收尾（最多约 20 秒）→ SIGTERM（Codex 不理 SIGHUP）；不认识的：SIGHUP → SIGTERM。
 - `--timeout` 默认 30 秒，超时退出码 4（栏位仍会继续升级到 SIGKILL）。
 - agent 自己脱离出去的后台进程（不在它的进程组里）不清。
 
 ### `corral install-skills`
 
-- 用法：`corral install-skills [--target all|claude|codex] [--remove] [--dry-run] [--yes]`
-- 选项：`--target` `--remove` `--dry-run` `--yes`
+- 用法：`corral install-skills [--target all|claude|codex] [--project 目录] [--remove] [--dry-run] [--yes]`
+- 选项：`--target` `--project` `--remove` `--dry-run` `--yes`
 - 输出字段：`ok` `action` `dry_run` `written` `items` `warnings`
 - 每项字段：`agent` `path` `status`
-- 把 corral 的 agent skill 写进 `${CLAUDE_CONFIG_DIR:-~/.claude}/skills/corral/SKILL.md` 和 `${CODEX_HOME:-~/.codex}/skills/corral/SKILL.md`，只写这两个文件。**写的是用户的全局目录，必须经人同意**：在终端里运行时先列出每个路径和状态再问 `[y/N]`；不在终端里运行时，没有 `--yes` 就以 `confirmation_required` 拒绝（附 `items`）。回答不是 y 时以 `declined` 失败，什么都不写。
+- 把 corral 的 agent skill 写进 `${CLAUDE_CONFIG_DIR:-~/.claude}/skills/corral/SKILL.md`（Claude Code）和 `~/.agents/skills/corral/SKILL.md`（Codex，官方文档的用户级位置），只写这两个文件。**写的是用户的全局目录，必须经人同意**：在终端里运行时先列出每个路径和状态再问 `[y/N]`；不在终端里运行时，没有 `--yes` 就以 `confirmation_required` 拒绝（附 `items`）。回答不是 y 时以 `declined` 失败，什么都不写。
 - `status`：安装时 `create` / `same`（内容相同，跳过）/ `overwrite`；`--remove` 时 `remove` / `absent` / `foreign`（不是 corral 写的文件，不删）。
+- `--project 目录`：改为写项目级位置 `<目录>/.claude/skills/corral/SKILL.md`（Claude Code）和 `<目录>/.agents/skills/corral/SKILL.md`（Codex），只在 agent 以该目录为工作目录时生效；目录必须已存在，否则 `bad_project`。确认规则相同。
 - `--dry-run` 只列出，不写。`--remove` 只删带 corral 标记的 SKILL.md 和变空的 `corral` 目录。PATH 上找不到 `corral` 时 `warnings` 里提示（skill 会让 agent 报告 corral 没装）。
 - 在沙箱里拒绝（退出码 6）。
 

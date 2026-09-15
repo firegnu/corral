@@ -22,5 +22,6 @@ class Claude:
             hooks[ev] = [entry]
         out = [argv[0], "--settings", json.dumps({"hooks": hooks}, ensure_ascii=False), *argv[1:]]
         if prompt is not None:
-            out.append(prompt)
+            # -- 结束选项解析：--allowedTools 这类多值选项会把追加在后面的首句当成自己的值吞掉（M8 实测）
+            out += ["--", prompt]
         return out

@@ -16,7 +16,7 @@ MAX_PENDING = 50       # 还认不出属于哪个会话的事件，最多暂存�
 MAX_OTHER_SESSIONS = 50
 MAX_INPUTS = 10
 READ_BLOCK = 1024 * 1024
-CURSOR_VERSION = 1
+CURSOR_VERSION = 2
 
 
 def digest(text):
@@ -27,7 +27,7 @@ def digest(text):
 def fresh(instance):
     return {"cursor": CURSOR_VERSION, "inst": instance, "offset": 0, "main_session": None, "other_sessions": [],
             "pending": [], "state": "starting", "last_tool": None, "turn_started": None, "last_event": None,
-            "last_event_t": None, "inputs": [], "reply": None, "reply_t": None}
+            "last_event_t": None, "inputs": [], "input_count": 0, "reply": None, "reply_t": None}
 
 
 def _same_dir(a, b):
@@ -47,6 +47,7 @@ def _update(snap, e):
     elif ev == "UserPromptSubmit":
         snap["state"], snap["turn_started"], snap["last_tool"] = "working", t, None
         snap["inputs"] = (snap["inputs"] + [{"t": t, "digest": digest(str(e.get("prompt", "")))}])[-MAX_INPUTS:]
+        snap["input_count"] += 1
     elif ev in ("PreToolUse", "PostToolUse"):
         snap["state"] = "working"
         snap["last_tool"] = e.get("tool_name", snap["last_tool"])

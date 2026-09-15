@@ -83,7 +83,7 @@ tests/
 
 **skill**：一份 SKILL.md 给两家共用。触发描述写中英文说法（「开一个 Claude Code / Codex 看一下」「交给另一个 agent」「delegate to another agent」等）。开头自检 `command -v corral`，找不到就告诉用户没装并停下。标准流程是 `start --unique --prompt` → `wait --timeout 90 --quiet 120`（退出码 4 就重复，因为 agent 自己的 shell 工具有超时）→ `reply` → 用完 `stop`。退出码处理：7、8 稍后重试；6 告诉用户不带沙箱重启调用方（如 `--yolo`）；3 不要重试回车，看状态或让人接入。规矩：不替对方回答对话框；只给自己启动的 agent 送话；名字由调用方起。完整说明运行 `corral guide`。
 
-**install-skills**：目标 `${CLAUDE_CONFIG_DIR:-~/.claude}/skills/corral/SKILL.md` 和 `${CODEX_HOME:-~/.codex}/skills/corral/SKILL.md`，只写这两个文件；先列出每个路径的状态（新建 / 相同跳过 / 内容不同将覆盖），终端里问 `[y/N]`；非终端必须显式 `--yes`；`--dry-run` 只列不写；`--target claude|codex|all`；`--remove` 只删带 corral 标记的 SKILL.md 及其空目录；沙箱里拒绝；PATH 上没有 corral 时提示。
+**install-skills**：目标 `${CLAUDE_CONFIG_DIR:-~/.claude}/skills/corral/SKILL.md` 和 `~/.agents/skills/corral/SKILL.md`（Codex 官方文档位置，M8 后定），只写这两个文件；先列出每个路径的状态（新建 / 相同跳过 / 内容不同将覆盖），终端里问 `[y/N]`；非终端必须显式 `--yes`；`--dry-run` 只列不写；`--target claude|codex|all`；`--remove` 只删带 corral 标记的 SKILL.md 及其空目录；`--project <目录>` 写项目级位置（`<目录>/.claude/skills/`、`<目录>/.agents/skills/`）；沙箱里拒绝；PATH 上没有 corral 时提示。
 
 ## 里程碑
 
@@ -105,5 +105,33 @@ tests/
   验证：检查脚本比对 CLI 实际的命令 / 退出码和契约文档一致；按 AGENT_USAGE.md 走一遍委派流程（假 agent）。
 - [x] **M7b agent skill 与 install-skills**（先改 DESIGN.md 13.3、14 节，契约加 `install-skills`）。
   验证：skill 内容测试（命令都能解析、退出码与 errors 表一致、提到 `corral guide`、有中英文触发说法、不超过约 80 行、前置信息合法）；install-skills 测试全部在临时目录里跑，用 `CLAUDE_CONFIG_DIR` / `CODEX_HOME` 指过去（没有 `--yes` 的非终端环境拒绝写入、`--dry-run` 不写、只写这两个文件、相同内容跳过、覆盖前列出、`--remove` 只删带标记的文件、沙箱里拒绝、PATH 上没有 corral 时给提示）；契约核对脚本覆盖新命令。**这一步不往真实全局目录写任何东西。**
-- [ ] **M8 真实 agent 冒烟**（人的真实配置、便宜模型；每次前后比对全局配置文件哈希；需要权限框的步骤先问人）。
-  验证：经人同意后运行 `corral install-skills`（以及让 corral 进 PATH）；分别对 Claude Code 和 Codex 用自然语言说「开一个 Claude Code 看一下这个想法：…」，确认 skill 自动加载并走完四步（start → wait → reply → stop）、回复逐字对得上（外层 agent 会弹权限框的话先问人）；SPIKE 第 2、3、4、9、12 条再跑一遍；确定 Codex 的正常退出方式；验证单行也走粘贴模式；验证钩子副本在删除 / 移动仓库副本后仍工作（用仓库的临时副本启动）。
+- [x] **M8 真实 agent 冒烟**（人的真实配置、便宜模型；每次前后比对全局配置文件哈希；需要权限框的步骤先问人）。
+  验证：经人同意建 `~/.local/bin/corral` 软链让 corral 进 PATH；skill 用 `install-skills --project` 装到测试工作目录（Claude `/tmp/crc`、Codex `/tmp/crx`），不装全局；Codex 若不认项目级 skill，才临时装进全局 Codex skill 目录、测完 `--remove`；实测 Codex 读 `~/.codex/skills` 还是 `~/.agents/skills`；全局安装与否 M8 后由人定；分别对 Claude Code 和 Codex 用自然语言说「开一个 Claude Code 看一下这个想法：…」，确认 skill 自动加载并走完四步（start → wait → reply → stop）、回复逐字对得上（外层 agent 会弹权限框的话先问人）；SPIKE 第 2、3、4、9、12 条再跑一遍；确定 Codex 的正常退出方式；验证单行也走粘贴模式；验证钩子副本在删除 / 移动仓库副本后仍工作（用仓库的临时副本启动）。
+
+## M8 结果（2026-09-15，Claude Code 2.1.272 haiku / sonnet，Codex 0.154 gpt-5.6-luna low，用户真实配置）
+
+每步前后比对 `~/.claude/settings.json`、`~/.codex/config.toml`、`~/.codex/hooks.json` 哈希：唯一变化是经人同意信任 `/tmp/crx` 写入的 `[projects."/private/tmp/crx"]` 两行（已证明去掉这两行后哈希与基线一致；按人的要求不删，只告知）。
+
+**通过**
+- 送达与回复：两家多行 + 代码块逐字一致；忙时 send 退出码 7；Codex 单行 `?` 开头送达正确。
+- Esc 打断：Claude Code 无事件，`wait --quiet 5` 第 6 秒返回 `stopped-quiet`；Codex 有 `Interrupt` 事件。
+- 信任框：Codex 在新目录弹框时状态 `starting`；按回车（经人授权）后 `--prompt` 首句自动提交。
+- 接入与断开：两家接入窗口打字（来源 `human`）、SIGKILL 窗口后 agent 仍在、换尺寸重接能看到先前对话、Ctrl-] 退出；退出后立刻 send 按设计 `human_active`，31 秒后送达，对话还在。
+- 权限框（人亲手点）：弹框 0.1 s 内 `blocked`，停 29 s 不误判，点允许后 working → idle，文件写成。
+- 钩子独立：用仓库临时副本启动 Claude Code，删掉副本后下一轮事件、状态、回复正常。
+- skill（项目级安装，未装全局）：Claude Code 从 `<目录>/.claude/skills`、Codex 从 `<目录>/.agents/skills` 加载；外层 **sonnet** 和外层 **Codex luna** 听到「开一个 Claude Code 看一下这个想法…」都加载 corral skill，走完自检 → `start --unique --prompt` → `wait --timeout 90 --quiet 120` → reply → stop，最终回答逐字包含内层回复。外层 **haiku** 看到了 corral skill 但没选：第一次自己作答，改描述后改用内置 Agent 子代理。
+- Codex 用户级 skill：`~/.codex/skills` 和 `~/.agents/skills` 两处都会读；人定只装官方文档位置 `~/.agents/skills`。
+- 人的决定：skill 暂不装全局；`~/.local/bin/corral` 软链保留；skill 示例不指定模型，补一句「需要省钱时调用方可自己传模型参数」；`/private/tmp/crx` 信任记录已由人删除。
+
+**M8 发现并已修复（都补了测试）**
+1. 栏位崩溃杀掉 agent：macOS kqueue 把同一 socket 的可写、可读拆成两条事件，杀掉接入窗口时先写失败断开、再读已关闭的 socket 抛 EBADF。现在处理前先确认连接还在，任何单个连接的意外只断开该连接。
+2. `--prompt` 首句被多值选项吞掉（Claude Code `--allowedTools`）：首句前加 `--`；且带首句启动时，首句的输入事件出现前状态保持 `starting`，不再误报 `idle`。
+3. Codex 正常退出要收尾好几秒（实测 7.6 s），原先 5 秒就发 SIGTERM：改为等 20 秒；实测 `stop` 以 `keys`、退出码 0 结束。
+4. `--prompt` 首句的输入来源报成 `agent`：改为 `send`。
+5. 鼠标悬停移动（1003 上报，Claude Code 全屏渲染时开）被算作人工操作，导致 send 一直 `human_active`：只移动不按键不再算。
+6. skill 描述：写明用户要的是可接入的独立会话，不是自己作答、也不是内置子代理。
+
+**观察（不是 corral 的问题）**
+- 登录 shell 的 `CLAUDE_CODE_NO_FLICKER` 现在会传给 agent，Claude Code 以全屏渲染运行（M2 的预期效果）。
+- skill 示例 `-- claude` 不带模型，内层 agent 用用户默认模型（本机是 Opus）。
+- haiku 偶尔把极短的「只回复 A」当成提示词注入拒绝。

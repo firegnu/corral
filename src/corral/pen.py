@@ -15,6 +15,7 @@ import socket
 import struct
 import termios
 import time
+import traceback
 
 from corral import protocol, termmodes
 
@@ -87,6 +88,8 @@ class Pen:
         self.timers = []            # [时间, 函数]
         self.size = (DEFAULT_ROWS, DEFAULT_COLS)
         self.recent_sends = []      # [{"t", "digest"}]，用来判断输入事件是不是 send 送的
+        if cfg.get("prompt_digest"):  # start --prompt 的首句也是调用方给的
+            self.recent_sends.append({"t": self.started, "digest": cfg["prompt_digest"]})
         self.stop_step = None       # stop 流程执行到哪一步（keys / SIGHUP / SIGTERM / SIGKILL）
 
     # ---- 启动
@@ -141,7 +144,7 @@ class Pen:
             "name": self.cfg["name"], "instance": self.cfg["instance"], "proto": protocol.PROTOCOL_VERSION,
             "pen_pid": os.getpid(), "agent_pid": self.agent_pid, "cwd": self.cfg["cwd"],
             "argv": self.cfg["argv"], "kind": self.cfg["kind"], "started": self.started,
-            "version": self.cfg["version"],
+            "version": self.cfg["version"], "has_prompt": bool(self.cfg.get("prompt_digest")),
         })
 
     # ---- 应答
@@ -351,20 +354,32 @@ class Pen:
     def on_accept(self):
         try:
             s, _ = self.listener.accept()
-        except BlockingIOError:
+        except OSError:  # 包括描述符用尽：这次连不上，栏位照常
             return
         s.setblocking(False)
         c = Client(s)
         self.clients[s] = c
         self.sel.register(s, selectors.EVENT_READ, c)
 
+    def safe_on_client(self, c, events):
+        """一个客户端出任何意外只断开这个客户端：栏位崩了会连带杀掉 agent。"""
+        try:
+            self.on_client(c, events)
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+            if c.sock in self.clients:
+                self.drop(c)
+
     def on_client(self, c, events):
+        # kqueue 会把同一个 socket 的可读、可写拆成两条事件；前一条可能已经把这个客户端断开了
+        if c.sock not in self.clients:
+            return
         if events & selectors.EVENT_READ:
             try:
                 data = c.sock.recv(65536)
             except BlockingIOError:
                 data = None
-            except ConnectionError:
+            except OSError:
                 data = b""
             if data == b"":
                 self.drop(c)
@@ -441,7 +456,7 @@ class Pen:
                 elif key.data == "listen":
                     self.on_accept()
                 else:
-                    self.on_client(key.data, events)
+                    self.safe_on_client(key.data, events)
             self.check_child()
 
     def shutdown(self):
