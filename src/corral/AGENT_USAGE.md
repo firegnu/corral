@@ -32,7 +32,7 @@ corral stop <名字>
 
 - `wait` 返回的 `result`：`idle` 这一轮结束；`blocked` 弹了权限框或提问框，要人处理（告诉人去 `corral attach <名字>`）；`stopped-quiet` 只有加了 `--quiet 秒` 才会出现，表示 agent 在 working 状态下长时间没动静，多半是人在窗口里打断了它。
 - `idle` 只表示这一轮结束，agent 之后可能自己再开一轮。拿到 `reply` 后如果 `last_input_source` 是 `agent`，说明这一轮是它自己开的。
-- `wait` 默认最多等 600 秒，可用 `--timeout` 改；超时退出码 4。状态一直是 `starting`，说明它启动时卡在对话框里，让人接入去看。
+- `wait` 默认最多等 600 秒，可用 `--timeout` 改；超时退出码 4。你的 shell 工具如果有超时（常见是两分钟），就用 `--timeout 90` 反复调用，直到返回结果。状态一直是 `starting`，说明它启动时卡在对话框里，让人接入去看。
 
 ## send 被拒绝时
 

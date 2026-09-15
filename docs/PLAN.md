@@ -7,7 +7,7 @@
 
 - 只用 Python 标准库；命令和栏位要求 Python ≥ 3.11；`hook.py` 要求 Python ≥ 3.9（由 `/usr/bin/python3` 运行）。
 - macOS 和 Linux；不做 Windows。
-- 不安装：只提供 `bin/corral` 和无依赖的 `pyproject.toml`，装不装由人决定。
+- 不安装：只提供 `bin/corral` 和无依赖的 `pyproject.toml`。skill 只能通过 `corral install-skills` 经人确认后写入全局目录，默认不装；M8 前经人同意再装。corral 本身怎么进 PATH，由人决定。
 - `spike/` 只作参考，不直接复用；移植试验里验证过的做法。
 - 每个行为先写测试并确认失败，再实现（测试用标准库 `unittest`）。
 - M0–M7 不调用真实 agent，不花额度；M8 用人的真实配置和便宜模型，需要触发权限框的步骤先问人。
@@ -35,6 +35,8 @@ src/corral/
   agents/       base.py（钩子命令）、claude.py、codex.py：启动参数（钩子、首句）、正常退出方式
 docs/CONTRACT.md      对外契约 v1
 src/corral/AGENT_USAGE.md  给 agent 看的使用说明（corral guide 打印；随包分发，所以不放 docs/）
+src/corral/skill/SKILL.md   Claude Code 和 Codex 共用的 skill（要点 + 指向 corral guide）
+src/corral/skills.py        install-skills：列出路径、确认、写入 / 删除
 tests/
   fake_agents/        假 claude（读 --settings 执行钩子）、假 codex（用 tomllib 解析 -c）
   fixtures/           上一个协议版本的栏位实现、各事件格式版本的样例（兼容测试用）
@@ -79,6 +81,10 @@ tests/
 
 **socket 路径**：放在名字目录里，超过 104 字节 `start` 拒绝。
 
+**skill**：一份 SKILL.md 给两家共用。触发描述写中英文说法（「开一个 Claude Code / Codex 看一下」「交给另一个 agent」「delegate to another agent」等）。开头自检 `command -v corral`，找不到就告诉用户没装并停下。标准流程是 `start --unique --prompt` → `wait --timeout 90 --quiet 120`（退出码 4 就重复，因为 agent 自己的 shell 工具有超时）→ `reply` → 用完 `stop`。退出码处理：7、8 稍后重试；6 告诉用户不带沙箱重启调用方（如 `--yolo`）；3 不要重试回车，看状态或让人接入。规矩：不替对方回答对话框；只给自己启动的 agent 送话；名字由调用方起。完整说明运行 `corral guide`。
+
+**install-skills**：目标 `${CLAUDE_CONFIG_DIR:-~/.claude}/skills/corral/SKILL.md` 和 `${CODEX_HOME:-~/.codex}/skills/corral/SKILL.md`，只写这两个文件；先列出每个路径的状态（新建 / 相同跳过 / 内容不同将覆盖），终端里问 `[y/N]`；非终端必须显式 `--yes`；`--dry-run` 只列不写；`--target claude|codex|all`；`--remove` 只删带 corral 标记的 SKILL.md 及其空目录；沙箱里拒绝；PATH 上没有 corral 时提示。
+
 ## 里程碑
 
 - [x] **M0 骨架**：cli、paths、sandbox、退出码；CONTRACT.md 初稿。
@@ -97,5 +103,7 @@ tests/
   验证：假 codex 不理 SIGHUP 时按顺序升级信号；stop 等到栏位退出才返回，之后立刻同名 start 成功；用 `tests/fixtures/` 里上一个协议版本的栏位跑 status / send / attach / stop；栏位报不认识的协议版本时退出码 9。
 - [x] **M7 文档**：CONTRACT.md 定稿（命令、JSON 字段、状态值、退出码、兼容规则、`--dangerously-bypass-hook-trust` 的原因）、AGENT_USAGE.md、`corral guide`。
   验证：检查脚本比对 CLI 实际的命令 / 退出码和契约文档一致；按 AGENT_USAGE.md 走一遍委派流程（假 agent）。
+- [x] **M7b agent skill 与 install-skills**（先改 DESIGN.md 13.3、14 节，契约加 `install-skills`）。
+  验证：skill 内容测试（命令都能解析、退出码与 errors 表一致、提到 `corral guide`、有中英文触发说法、不超过约 80 行、前置信息合法）；install-skills 测试全部在临时目录里跑，用 `CLAUDE_CONFIG_DIR` / `CODEX_HOME` 指过去（没有 `--yes` 的非终端环境拒绝写入、`--dry-run` 不写、只写这两个文件、相同内容跳过、覆盖前列出、`--remove` 只删带标记的文件、沙箱里拒绝、PATH 上没有 corral 时给提示）；契约核对脚本覆盖新命令。**这一步不往真实全局目录写任何东西。**
 - [ ] **M8 真实 agent 冒烟**（人的真实配置、便宜模型；每次前后比对全局配置文件哈希；需要权限框的步骤先问人）。
-  验证：SPIKE 第 2、3、4、9、12 条再跑一遍；确定 Codex 的正常退出方式；验证单行也走粘贴模式；验证钩子副本在删除 / 移动仓库副本后仍工作（用仓库的临时副本启动）。
+  验证：经人同意后运行 `corral install-skills`（以及让 corral 进 PATH）；分别对 Claude Code 和 Codex 用自然语言说「开一个 Claude Code 看一下这个想法：…」，确认 skill 自动加载并走完四步（start → wait → reply → stop）、回复逐字对得上（外层 agent 会弹权限框的话先问人）；SPIKE 第 2、3、4、9、12 条再跑一遍；确定 Codex 的正常退出方式；验证单行也走粘贴模式；验证钩子副本在删除 / 移动仓库副本后仍工作（用仓库的临时副本启动）。

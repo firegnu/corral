@@ -6,7 +6,8 @@ import os
 import sys
 import time
 
-from corral import __version__, agents, attach, client, errors, events, paths, registry, sandbox, spawn, termmodes
+from corral import (__version__, agents, attach, client, errors, events, paths, registry, sandbox, skills, spawn,
+                    termmodes)
 from corral.errors import (EXIT_ERROR, EXIT_HUMAN_ACTIVE, EXIT_NOT_DELIVERED, EXIT_NOT_IDLE, EXIT_OK, EXIT_TIMEOUT,
                            CorralError)
 
@@ -72,6 +73,12 @@ def build_parser():
     s.add_argument("--timeout", type=float, default=30.0)
 
     sub.add_parser("guide")
+
+    s = sub.add_parser("install-skills")
+    s.add_argument("--target", choices=("all", "claude", "codex"), default="all")
+    s.add_argument("--remove", action="store_true")
+    s.add_argument("--dry-run", action="store_true")
+    s.add_argument("--yes", action="store_true")
     return p
 
 
@@ -272,13 +279,19 @@ def cmd_guide(args):
     return EXIT_OK
 
 
+def cmd_install_skills(args):
+    result, code = skills.run(args.target, args.remove, args.dry_run, args.yes)
+    emit(result)
+    return code
+
+
 def cmd_attach(args):
     return attach.run(args.name, args.wait)
 
 
 COMMANDS = {"status": cmd_status, "send": cmd_send, "keys": cmd_keys, "wait": cmd_wait, "reply": cmd_reply,
             "where": cmd_where, "read": cmd_read, "ls": cmd_ls, "attach": cmd_attach, "stop": cmd_stop,
-            "guide": cmd_guide}
+            "guide": cmd_guide, "install-skills": cmd_install_skills}
 
 
 def dispatch(args, agent_command):

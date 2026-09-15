@@ -8,7 +8,7 @@
 
 ## 通用规则
 
-- **输出**：除 `read`（输出文字）、`attach`（接管终端）、`guide`（输出使用说明）外，每个命令在标准输出写**一行 JSON**。
+- **输出**：除 `read`（输出文字）、`attach`（接管终端）、`guide`（输出使用说明）外，每个命令在标准输出写**一行 JSON**（`install-skills` 在终端里确认时，提示写到标准错误）。
 - **成功**：`{"ok": true, …}`，退出码 0。
 - **失败**：`{"ok": false, "error": "<标识>", "message": "<给人看的说明>", …附加字段}`，以对应退出码退出。附加字段视情况带 `name`、`instance`、`state`、`exited`、`last_human_input`、`proto` 等。
 - **沙箱**：除 `guide` 和 `--version` 外，所有命令发现自己在 Codex 沙箱里（环境变量 `CODEX_SANDBOX` 存在），立即以退出码 6 拒绝，不碰状态目录。沙箱里既起不了栏位，也连不上正在跑的栏位。
@@ -128,6 +128,17 @@
 - 各种 agent 的顺序：Claude Code：SIGHUP → SIGTERM；Codex：连按两次 Ctrl-C → SIGTERM（Codex 不理 SIGHUP）；不认识的：SIGHUP → SIGTERM。
 - `--timeout` 默认 30 秒，超时退出码 4（栏位仍会继续升级到 SIGKILL）。
 - agent 自己脱离出去的后台进程（不在它的进程组里）不清。
+
+### `corral install-skills`
+
+- 用法：`corral install-skills [--target all|claude|codex] [--remove] [--dry-run] [--yes]`
+- 选项：`--target` `--remove` `--dry-run` `--yes`
+- 输出字段：`ok` `action` `dry_run` `written` `items` `warnings`
+- 每项字段：`agent` `path` `status`
+- 把 corral 的 agent skill 写进 `${CLAUDE_CONFIG_DIR:-~/.claude}/skills/corral/SKILL.md` 和 `${CODEX_HOME:-~/.codex}/skills/corral/SKILL.md`，只写这两个文件。**写的是用户的全局目录，必须经人同意**：在终端里运行时先列出每个路径和状态再问 `[y/N]`；不在终端里运行时，没有 `--yes` 就以 `confirmation_required` 拒绝（附 `items`）。回答不是 y 时以 `declined` 失败，什么都不写。
+- `status`：安装时 `create` / `same`（内容相同，跳过）/ `overwrite`；`--remove` 时 `remove` / `absent` / `foreign`（不是 corral 写的文件，不删）。
+- `--dry-run` 只列出，不写。`--remove` 只删带 corral 标记的 SKILL.md 和变空的 `corral` 目录。PATH 上找不到 `corral` 时 `warnings` 里提示（skill 会让 agent 报告 corral 没装）。
+- 在沙箱里拒绝（退出码 6）。
 
 ### `corral guide`
 

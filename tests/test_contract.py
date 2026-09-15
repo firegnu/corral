@@ -24,7 +24,7 @@ def command_sections(doc):
     """### `corral xxx` 小节 → {标签: [反引号里的词]}"""
     sections = {}
     for block in re.split(r"^### ", doc, flags=re.M)[1:]:
-        m = re.match(r"`corral (\w+)`", block)
+        m = re.match(r"`corral ([\w-]+)`", block)
         if not m:
             continue
         info = {}

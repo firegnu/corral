@@ -98,6 +98,7 @@ herdr 是两套东西：常驻后台服务（工作区、标签、窗格、按�
 | `corral attach <名字>` | 直接连栏位，原样转发输入输出。接入时先重放 agent 打开的终端模式，再触发一次终端尺寸变化让 agent 自己重绘；把名字写进窗口标题；按约定键（Ctrl-]）退出，agent 继续跑，退出时还原终端模式。**退出键要按键盘协议解析**：agent 打开 kitty 键盘协议后，终端发来的 Ctrl-] 是 `ESC[93;5u` 而不是单字节 |
 | `corral attach --wait <名字>` | 名字还不存在时显示「等待某某出现」，一出现就自动接上；agent 退出后回到等待，下次出现再接上 |
 | `corral stop <名字>` | 先用这种 agent 自己的退出方式，超时再依次发 SIGHUP、SIGTERM、SIGKILL；**等栏位真正退出才返回**。agent 自己脱离出去的后台进程不清 |
+| `corral guide` / `corral install-skills` | 打印给 agent 看的使用说明；经人确认后把 agent skill 写进两家的全局 skill 目录（见 13.3） |
 
 所有查询命令都有 JSON 输出；退出码写进契约文档。**所有命令**（不只是 `start`）发现自己在 Codex 沙箱里，都以同一个退出码拒绝并说明原因（沙箱里连不上栏位，否则会误报「不存在」）。
 
@@ -348,12 +349,20 @@ agent（在自己的 shell 里）
 
 corral 自带一份给 agent 看的使用说明，只讲命令怎么用。任何 agent 读了它，就能自己开别的 agent、送话、等回复、取回复。
 
+**怎么送到 agent 手里**：光有命令不够，agent 得知道 corral 存在、什么时候用。
+
+- `corral guide` 打印完整使用说明。
+- 一份 agent skill（Claude Code 和 Codex 的 skill 格式相同，共用一份）：触发描述写中英文的常见说法（「开一个 Claude Code 看一下」「交给另一个 agent」「delegate to another agent」…），正文只放要点（自检 corral 是否可用、标准四步、退出码处理、规矩），完整说明指向 `corral guide`。测试核对 skill 里的命令和退出码与实现一致。
+- agent 自己的 shell 工具有超时（Claude Code 的 Bash 默认 2 分钟），所以 skill 让 agent 用短超时 `wait` 并循环，不要一次等 10 分钟。
+- **安装要人明确同意**：`corral install-skills` 列出要写的路径（`~/.claude/skills/corral/SKILL.md`、`~/.codex/skills/corral/SKILL.md`，遵循 `CLAUDE_CONFIG_DIR`、`CODEX_HOME`）和每个路径的状态，确认后才写；不在终端里运行时必须显式 `--yes`；`--remove` 只删 corral 自己写的文件。corral 不默认安装。
+- 不做 MCP：两家 agent 都能直接跑命令；MCP 要改全局配置，每个会话还多一个进程。
+
 ## 14. 设计约束
 
 - **栏位不能挂**：除栏位外没有任何常驻进程；升级不杀正在跑的栏位；正在跑的 agent 不依赖 corral 仓库里的文件和某个特定版本的 Python（见 5.3 钩子、5.4）。
 - **只听本机**：状态目录 0700，sock 和所有内部文件 0600，放在用户自己的目录下。
 - **不摆窗口布局**：没人接入时伪终端用默认尺寸，有人接入就换成接入窗口的尺寸。
-- **不动全局配置**：钩子只随栏位启动的那个 agent 生效，并且和用户已有的全局钩子共存。corral 自己送进 agent 的字节也不能导致 agent 改配置（见第 12 节难点 6）。
+- **不动全局配置**：钩子只随栏位启动的那个 agent 生效，并且和用户已有的全局钩子共存。唯一例外：用户明确运行 `corral install-skills` 并确认后，写入两家的 skill 文件（skill 目录不是配置文件，但属于全局目录）。corral 自己送进 agent 的字节也不能导致 agent 改配置（见第 12 节难点 6）。
 
 ## 15. 不做
 
