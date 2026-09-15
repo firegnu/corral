@@ -18,9 +18,11 @@
 bin/corral                 启动脚本（#!/usr/bin/env python3，把 src 加进路径；版本不够就报错）
 pyproject.toml
 src/corral/
-  cli.py        参数解析、JSON 输出、退出码
+  cli.py        参数解析、JSON 输出
+  errors.py     退出码、错误类型、契约版本号
   paths.py      状态目录（默认 ~/.corral，CORRAL_HOME 可改）、名字校验、socket 路径长度、目录和文件权限
   sandbox.py    沙箱识别（所有命令共用）
+  registry.py   扫描状态目录：ls、清残留
   client.py     连接栏位、请求 / 应答、协议版本协商
   protocol.py   握手（一行 JSON）+ 接入后的分帧；协议版本号
   spawn.py      start：加锁、--unique、复制 hook.py、试跑 /usr/bin/python3、两次 fork、等栏位就绪
@@ -30,12 +32,12 @@ src/corral/
   attach.py     接入客户端、--wait
   events.py     增量读事件文件（cursor）、只认主会话、状态机、最近一次输入的来源
   hook.py       钩子脚本（Python 3.9 兼容，只用 json/os/sys/time）
-  agents/       base.py、claude.py、codex.py：启动参数（钩子、首句）、正常退出方式、事件映射
+  agents/       base.py（钩子命令）、claude.py、codex.py：启动参数（钩子、首句）、正常退出方式
 docs/CONTRACT.md      对外契约 v1
-docs/AGENT_USAGE.md   给 agent 看的使用说明（corral guide 打印）
+src/corral/AGENT_USAGE.md  给 agent 看的使用说明（corral guide 打印；随包分发，所以不放 docs/）
 tests/
   fake_agents/        假 claude（读 --settings 执行钩子）、假 codex（用 tomllib 解析 -c）
-  fixtures/           上一个协议版本的栏位实现（兼容测试用）
+  fixtures/           上一个协议版本的栏位实现、各事件格式版本的样例（兼容测试用）
 ```
 
 ## 定下来的实现细节
@@ -79,21 +81,21 @@ tests/
 
 ## 里程碑
 
-- [ ] **M0 骨架**：cli、paths、sandbox、退出码；CONTRACT.md 初稿。
+- [x] **M0 骨架**：cli、paths、sandbox、退出码；CONTRACT.md 初稿。
   验证：单元测试——名字校验、socket 路径超长拒绝、各命令在沙箱里一律退出码 6、退出码常量和契约一致。
-- [ ] **M1 栏位 + start / ls / where / read / status（终端层字段）**，被测对象是普通命令（`sh`）。
+- [x] **M1 栏位 + start / ls / where / read / status（终端层字段）**，被测对象是普通命令（`sh`）。
   验证：集成测试——同名加锁（5）、`--unique`、start 退出后栏位仍在且父进程是 1、agent 退出码记录、手动杀栏位后 ls 清残留；**权限**：状态目录各层 0700，lock / meta.json / sock / exit.json / pen.log 为 0600（hook.py、events、cursor 的权限在 M4 补测）；栏位协议版本出现在握手和 meta.json。
-- [ ] **M2 环境**。
+- [x] **M2 环境**。
   验证：单元测试用假 `SHELL` 脚本——配置往外打印、配置慢触发超时退回白名单并带警告、会话变量被剥、`--env` 覆盖；集成测试检查 agent 实际拿到的环境。
-- [ ] **M3 attach / attach --wait**、终端模式重放和还原、退出键、人工按键时间。
+- [x] **M3 attach / attach --wait**、终端模式重放和还原、退出键、人工按键时间。
   验证：伪终端测试——尺寸传递和改尺寸、第二个接入者只读、Ctrl-] 的单字节和 CSI u 两种编码、焦点事件 / 光标位置报告不更新人工按键时间而普通按键和鼠标会、`--wait` 两轮自动接上又回到等待。
-- [ ] **M4 钩子、适配器、事件、状态**。
+- [x] **M4 钩子、适配器、事件、状态**。
   验证：hook.py 用 `/usr/bin/python3` 跑通、不往标准输出写、只用允许的模块（测试检查 import）；钩子命令不含仓库路径和 start 时的 Python 路径；hook.py / events / cursor 为 0600；假 agent 测试——主会话过滤（子会话噪声）、会话开始和输入乱序、agent 自己开新一轮、权限请求变 blocked、打断事件；**增量读**：大事件文件只读新增部分（在已读位置之前写入坏数据不影响结果）、半行不消费、实例变化和文件变短重算、两个 status 并发结果一致；**兼容**：事件格式上一个版本可读，不认识的版本退出码 9。
-- [ ] **M5 send / keys / wait --quiet / reply / start --prompt**。
+- [x] **M5 send / keys / wait --quiet / reply / start --prompt**。
   验证：假 agent 测试——非 idle 拒绝（7）、30 秒内人工按键拒绝（8）和强制参数、终端自动回应不触发 8、按文字确认送达、确认失败退出码 3 且没有补发按键、输入来源三种、`stopped-quiet` 只在 working 时出现、`--prompt` 由假 agent 自己提交、wait 在「会话开始比输入早几十毫秒」时不提前返回。
-- [ ] **M6 stop 与协议兼容**。
+- [x] **M6 stop 与协议兼容**。
   验证：假 codex 不理 SIGHUP 时按顺序升级信号；stop 等到栏位退出才返回，之后立刻同名 start 成功；用 `tests/fixtures/` 里上一个协议版本的栏位跑 status / send / attach / stop；栏位报不认识的协议版本时退出码 9。
-- [ ] **M7 文档**：CONTRACT.md 定稿（命令、JSON 字段、状态值、退出码、兼容规则、`--dangerously-bypass-hook-trust` 的原因）、AGENT_USAGE.md、`corral guide`。
+- [x] **M7 文档**：CONTRACT.md 定稿（命令、JSON 字段、状态值、退出码、兼容规则、`--dangerously-bypass-hook-trust` 的原因）、AGENT_USAGE.md、`corral guide`。
   验证：检查脚本比对 CLI 实际的命令 / 退出码和契约文档一致；按 AGENT_USAGE.md 走一遍委派流程（假 agent）。
 - [ ] **M8 真实 agent 冒烟**（人的真实配置、便宜模型；每次前后比对全局配置文件哈希；需要权限框的步骤先问人）。
   验证：SPIKE 第 2、3、4、9、12 条再跑一遍；确定 Codex 的正常退出方式；验证单行也走粘贴模式；验证钩子副本在删除 / 移动仓库副本后仍工作（用仓库的临时副本启动）。

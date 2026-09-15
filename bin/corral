@@ -1,0 +1,19 @@
+#!/usr/bin/env python3
+"""corral 启动脚本：检查 Python 版本，把 src 加进路径。"""
+import json
+import os
+import sys
+
+if sys.version_info < (3, 11):
+    sys.stdout.write(json.dumps({
+        "ok": False, "error": "python_too_old",
+        "message": "corral needs Python >= 3.11, this is %d.%d (%s)" % (sys.version_info[0], sys.version_info[1],
+                                                                       sys.executable),
+    }) + "\n")
+    sys.exit(1)
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, "src"))
+
+from corral.cli import main  # noqa: E402
+
+sys.exit(main())

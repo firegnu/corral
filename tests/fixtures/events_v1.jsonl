@@ -1,0 +1,6 @@
+{"v": 1, "t": 1.0, "ev": "SessionStart", "inst": "f1f1f1f1f1f1", "has_transcript": true, "session_id": "main", "cwd": "__CWD__", "source": "startup"}
+{"v": 1, "t": 2.0, "ev": "UserPromptSubmit", "inst": "f1f1f1f1f1f1", "has_transcript": true, "session_id": "main", "cwd": "__CWD__", "prompt": "hi"}
+{"v": 1, "t": 2.5, "ev": "SessionStart", "inst": "f1f1f1f1f1f1", "has_transcript": false, "session_id": "sub", "cwd": "/elsewhere", "source": "startup"}
+{"v": 1, "t": 2.6, "ev": "PreToolUse", "inst": "f1f1f1f1f1f1", "has_transcript": false, "session_id": "sub", "cwd": "/elsewhere", "tool_name": "Bash"}
+{"v": 1, "t": 3.0, "ev": "PreToolUse", "inst": "f1f1f1f1f1f1", "has_transcript": true, "session_id": "main", "cwd": "__CWD__", "tool_name": "Bash"}
+{"v": 1, "t": 4.0, "ev": "Stop", "inst": "f1f1f1f1f1f1", "has_transcript": true, "session_id": "main", "cwd": "__CWD__", "last_assistant_message": "fixture reply"}

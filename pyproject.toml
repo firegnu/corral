@@ -1,0 +1,15 @@
+[project]
+name = "corral"
+version = "0.1.0"
+description = "Minimal hosting for interactive AI coding agents: one pen per agent, hooks for state, attach from any terminal."
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+corral = "corral.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+corral = ["hook.py", "AGENT_USAGE.md"]
