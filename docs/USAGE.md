@@ -26,7 +26,7 @@ corral install-skills                          # 把 skill 装进 Claude Code �
 
 ### 开
 
-**必须用 `corral start` 开。** 直接在终端里敲 `claude` 或 `codex --yolo` 开的 agent，corral 完全看不见：没有栏位托着它，钩子也没注入，`ls`、`send`、`attach` 都找不到它。
+**要让 corral 管的 agent，必须用 `corral start` 开。** 直接在终端里敲 `claude` 或 `codex --yolo` 开的 agent，corral 完全看不见：没有栏位托着它，钩子也没注入，`ls`、`send`、`attach` 都找不到它。只是在里面运行 corral 命令去开别的 agent 的那一方，不一定要用 corral 开，见第 4 节。
 
 ```sh
 corral start demo/alice --cwd ~/proj -- claude
@@ -45,7 +45,7 @@ corral start demo/ask --unique --cwd ~/proj --prompt "看一下这个想法：�
 ### 看、插话
 
 ```sh
-corral attach demo/alice          # 接进去，按 Ctrl-] 退出，agent 继续跑
+corral attach demo/alice          # 接进去，按 Ctrl-] 断开，agent 继续跑
 corral attach --wait demo/alice   # 名字还不存在就等着，一出现自动接上；agent 退出后回到等待
 ```
 
@@ -53,6 +53,22 @@ corral attach --wait demo/alice   # 名字还不存在就等着，一出现自�
 - 在任意终端软件、任意标签里都能接，接完退出，换个终端再接，agent 不受影响。
 - 「让它自动出现在旁边」：先开个分屏挂 `attach --wait`，再 start。分屏由你的终端软件做，corral 不管布局。
 - 人在接入窗口里操作过之后的 30 秒内，别的 agent 的 `send` 会避让（退出码 8）。只看不动不影响。
+
+### 断开和退出不是一回事
+
+Ctrl-] 是按住 Control 再按右方括号键 `]`。它由 `corral attach` 自己截下，不会送进 agent。
+
+| 你做的 | 谁收到 | 结果 |
+|---|---|---|
+| 按 Ctrl-] | `corral attach` | 只断开这个窗口。agent 继续跑，名字还在，随时再 attach |
+| 直接关掉窗口，或退出整个终端软件 | `corral attach` | 等于断开，agent 继续跑 |
+| 在里面输入 `/exit`，或连按两次 Ctrl-C | agent 本身 | agent 真的退出，这段对话结束，栏位跟着关，名字从 `ls` 里消失 |
+| `corral stop <名字>` | corral | 同样是结束 agent，但由 corral 用这种 agent 自己的方式退出，等它退干净才返回，并报告退出码 |
+
+- 暂时离开：按 Ctrl-] 或直接关窗口。结束它：`corral stop`。
+- `/exit` 也能结束，只是没有 `stop` 那样的确认。接进去后习惯性输入 `/exit` 是最容易误关 agent 的操作。
+- `attach --wait` 里按 Ctrl-] 会连等待一起退出；agent 自己退出时，它回到等待，下次同名 start 再自动接上。
+- 某个终端软件把 Ctrl-] 占用了，就直接关窗口，效果一样。
 
 ### 查
 
@@ -122,12 +138,32 @@ corral 的日常用法不是写脚本，而是**对你手头的 agent 说一句�
 2. `wait` 等对方答完，`reply` 取回复原文，整理后告诉你。
 3. 要追问就 `send` 再等；用完 `stop`。留着不关的，下次接着问同一个名字。
 
+### 委派方自己要不要用 corral 开
+
+不需要。委派方只是在自己的 shell 里运行 `corral start`、`wait`、`reply`，这些是普通命令，任何能跑命令的 agent 都能用，不管它自己是怎么开的。没有谁需要给委派方送话、查它状态、等它答完，你就坐在它窗口前直接跟它聊。
+
+但下面这几种情况，委派方也用 corral 开更好：
+
+- **关掉窗口它不丢**。直接敲 `claude` 开的，窗口一关就没了。
+- **换终端接着聊**。在一个终端软件里开的，回头在另一个里 attach 进去继续。
+- **别的程序或 agent 要给它送话**。比如做完一件事要叫醒它，它就必须在 corral 里。
+
+日常长时间用的主对话，建议也用 corral 开：
+
+```sh
+corral start demo/main --cwd ~/proj -- claude
+corral attach demo/main
+```
+
+离开按 Ctrl-]，要结束时 `corral stop demo/main`。别在里面输入 `/exit`，见第 3 节「断开和退出不是一回事」。
+
 它开出来的 agent 是独立的会话，有自己的上下文，看不到你和它的对话。所以要交代清楚的内容，让它在提示里写全，或者先写进文件再让对方「读某某文件」。长材料一律走文件。
 
 ### 你怎么看、怎么插手
 
 - `corral ls` 列出它开了哪些；agent 也会告诉你名字。
-- 想盯着看：`corral attach <名字>`，或事先在旁边挂 `corral attach --wait demo/ask`，它一开就自动出现。接进去可以直接和对方说话；接完 Ctrl-] 退出，不影响它们继续。
+- 想盯着看：`corral attach <名字>`。接进去可以直接和对方说话；接完 Ctrl-] 断开，不影响它们继续。
+- 想让它开出来的 agent 自动出现在旁边：让它用固定名字，比如说「用名字 demo/helper 开」，你事先在旁边挂 `corral attach --wait demo/helper`。`attach --wait` 只认完整名字，agent 默认用 `--unique` 起名会补上后缀，挂不上。
 - 对方弹了权限框或提问框：agent 会告诉你「blocked，请接入处理」，不会替对方点。你 attach 进去点完，它接着等。
 - 对方卡在启动对话框里：状态一直是 `starting`，同样接入处理。
 
@@ -168,7 +204,7 @@ corral 本身没有场景，场景来自你手上的活。下面这些不需要�
 
 - **长任务放着跑，换个终端接着看**。在一个终端里开的 agent，换台显示器、换个终端软件 `corral attach` 进去接着看。窗口关了它也不丢。
 - **常驻的专职 agent**。开一个固定名字的「文档助手」或「测试跑手」一直挂着，谁需要就让它问一句。它有自己积累的上下文，不用每次重讲。
-- **旁边一直开着观察窗**。挂一个 `corral attach --wait demo/ask`，你的 agent 每次开出来的临时 agent 都自动出现在那里，你随时能看它在干什么，也能直接插话。
+- **旁边一直开着观察窗**。约定一个固定名字，比如让 agent 开临时 agent 时都用 `demo/helper`，旁边挂 `corral attach --wait demo/helper`。每次开出来都自动出现在那里，你随时能看它在干什么，也能直接插话。同一时间只能有一个同名 agent，要并行开好几个时就换回 `--unique`，自己 attach。
 
 先用前两条，用一段时间自然会冒出自己的用法。
 
