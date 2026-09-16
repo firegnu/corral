@@ -28,6 +28,8 @@ corral stop <名字>
 
 临时 agent 不会自己退出，用完记得 `stop`；`corral ls` 看还开着哪些。
 
+**一个 agent 只走一条通道**：用 corral 开的 agent 仍然是一个普通的 agent 会话，别的渠道（会话之间的消息、子 agent 工具）也能碰到它，但 corral 看不见那些输入。送话、等待、停止都只用 corral，不要混用；否则状态和「最近一次输入的来源」会失真，`wait` 和 `reply` 会对不上。
+
 ## 等待时要知道的
 
 - `wait` 返回的 `result`：`idle` 这一轮结束；`blocked` 弹了权限框或提问框，要人处理（告诉人去 `corral attach <名字>`）；`stopped-quiet` 只有加了 `--quiet 秒` 才会出现，表示 agent 在 working 状态下长时间没动静，多半是人在窗口里打断了它。

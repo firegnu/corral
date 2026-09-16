@@ -40,6 +40,7 @@ corral stop <名字>
 
 - 不替对方回答对话框（不要用 `corral keys` 去点确认），交给用户。
 - 只给你自己 start 的 agent 送话，不碰 `corral ls` 里别人开的。
+- **一个 agent 只走一条通道**：用 corral 开的 agent，送话、等待、停止都只用 corral，不要再用别的渠道（会话之间的消息、子 agent 工具）给同一个 agent 送话；否则 corral 看到的状态和输入来源会失真，wait 和 reply 会对不上。
 - 名字由你起：用有意义的前缀加 `--unique`。
 - 不要读 corral 状态目录里的文件，只看命令输出的 JSON。
 - 更多命令和细节：运行 `corral guide`。
