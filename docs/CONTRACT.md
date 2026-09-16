@@ -49,14 +49,20 @@
 
 ### `corral send`
 
-- 用法：`corral send <名字> <文字> [--force] [--timeout 秒]`
-- 选项：`--force` `--timeout`
-- 输出字段：`ok` `name` `instance` `confirmed` `merged_with_draft` `latency`
+- 用法：`corral send <名字> <文字> [--force] [--timeout 秒] [--after 名字]`
+- 选项：`--force` `--timeout` `--after`
+- 输出字段：`ok` `name` `instance` `confirmed` `merged_with_draft` `latency` `after` `after_instance` `pending`
 - 送一段话（可以多行）并按回车，**以 agent 的输入事件里的文字和送出的一致为送达确认**，`confirmed: true`。`--timeout` 默认 15 秒。
 - 输入框里原有没提交的文字（人留下的草稿）时，送出的文字会和它拼在一起提交：只要送出之后的最近一条输入事件里**包含**送出的文字，也算送达，`merged_with_draft: true`（正常送达时为 `false`）。agent 收到的是拼接后的内容，调用方如果在意，让人接入去看；**不要重送**。
 - 拒绝：状态不是 `idle` → 退出码 7（附 `state`）；最近 30 秒内有人在接入窗口里操作过（按键、粘贴、鼠标点击 / 拖动 / 滚轮；终端自动发回的应答和鼠标只是移动不算）→ 退出码 8（附 `last_human_input`），稍后重试或加 `--force`。只是开着窗口看、没操作，照常送。
 - 超时没确认 → 退出码 3。**corral 不补发任何按键**：此刻屏幕上可能是菜单或对话框，补发的回车可能被当成选择。
 - 不认识的 agent：照样写入并回车，`confirmed: false`，不检查状态。
+- `--after <另一个名字>`：不马上送，等另一个 agent 这一轮结束后再送。
+  - 必须同时显式给 `--timeout`，否则是用法错误。
+  - 立即检查两个名字都在（不在 → 退出码 2），记下两者的实例编号，立即返回 `{"ok": true, "name", "instance", "after", "after_instance", "pending": true}`。之后由脱离出去的进程完成，结果不回报。
+  - 第一步，等另一个 agent：状态稳定在 `idle` 或 `blocked`（判定同 `wait`），或者它退出、实例编号变了、不是认识的 agent，或者等满 `--timeout` 秒。**任何一种都进入第二步。**
+  - 第二步，送话：规则同普通 `send`；遇到退出码 7、8 隔几秒再试，最多再试 `--timeout` 秒。目标 agent 不在了或实例编号和挂上时不同 → 放弃。送出后确认失败 → 放弃，不重送。
+  - `--force` 同样生效（跳过人工操作避让），不建议和 `--after` 一起用。
 
 ### `corral keys`
 

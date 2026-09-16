@@ -6,7 +6,9 @@ description: "Start a separate, new Claude Code or Codex agent session with the 
 
 # corral：开另一个 agent，送话，取回复
 
-先自检：运行 `command -v corral`。没有输出，就告诉用户「corral 没装（不在 PATH 上）」，然后停下，不要自己去找或安装。
+先自检，两项都要过：
+1. 运行 `command -v corral`。没有输出，就告诉用户「corral 没装（不在 PATH 上）」，然后停下，不要自己去找或安装。
+2. 运行 `echo "$CORRAL_NAME"`。输出为空，说明你自己不是用 corral 启动的。按约定所有 agent 都要在 corral 里，告诉用户「请先用 `corral start <名字> --cwd <目录> -- <agent 命令>` 启动我，再 `corral attach <名字>` 进来」，然后停下，不要委派。
 
 ## 标准四步
 
@@ -24,6 +26,22 @@ corral stop <名字>
    - `stopped-quiet`：对方 120 秒没有动静，多半被人打断了。告诉用户，不要当成已经答完。
 3. **reply**：`text` 是对方回复的原文，整理后告诉用户。
 4. **stop**：用完一定要 stop。需要追问就先 `corral send <名字> "<追问>"`，再 wait、reply，最后 stop。
+
+## 长任务：交出去不等，做完被提醒
+
+要跑很久（跑测试、批量改、同时开好几个），或者用户说「做完告诉我」，就不要在前台 wait：
+
+```sh
+corral start demo/ask --unique --cwd <工作目录> --prompt "<要交给对方的话>" -- claude
+corral send "$CORRAL_NAME" "<提醒的话>" --after <名字> --timeout 3600
+```
+
+1. 交给对方的话末尾固定加上：「命令都在前台跑完，全部做完后，回复最后一行写 DONE」。
+2. 提醒的话写成「<名字> 这一轮结束了，去看它的状态和回复」。`send --after` 立即返回，告诉用户已经交出去，然后结束这一轮。
+3. 对方这一轮结束时，这句话会送进你的输入框。收到后运行 `corral status <名字>` 和 `corral reply <名字>`：
+   - 回复最后一行是 DONE：整理结果告诉用户，然后 stop。
+   - 状态是 working：被叫早了，再运行一次上面的 `send --after`，结束这一轮。
+   - 空闲、blocked 或已经不在，但没有 DONE：告诉用户去 `corral attach <名字>` 看。
 
 ## 退出码
 

@@ -14,6 +14,8 @@ from corral.errors import (EXIT_ERROR, EXIT_HUMAN_ACTIVE, EXIT_NOT_DELIVERED, EX
 ENTER_DELAY = 0.3       # 粘贴完隔一小段再送回车，避免回车被当成粘贴内容
 WAIT_POLL = 0.2
 WAIT_STABLE = 0.5       # 会话开始和输入事件可能相隔几十毫秒先后到，idle / blocked 要稳定这么久才算
+SEND_TIMEOUT = 15.0     # send 默认等送达确认多久
+AFTER_RETRY = 2.0       # send --after 遇到 not_idle / human_active 隔多久再试
 HUMAN_SOURCE_WINDOW = 2.0
 KEYS = {"enter": b"\r", "esc": b"\x1b", "tab": b"\t", "backspace": b"\x7f", "space": b" ",
         "up": b"\x1b[A", "down": b"\x1b[B", "right": b"\x1b[C", "left": b"\x1b[D",
@@ -44,7 +46,8 @@ def build_parser():
     s.add_argument("name")
     s.add_argument("text")
     s.add_argument("--force", action="store_true")
-    s.add_argument("--timeout", type=float, default=15.0)
+    s.add_argument("--timeout", type=float)
+    s.add_argument("--after")
 
     s = sub.add_parser("keys")
     s.add_argument("name")
@@ -149,49 +152,112 @@ def cmd_status(args):
     return EXIT_OK
 
 
-def cmd_send(args):
-    st = agent_status(args.name)
+def deliver(name, text, force, timeout, st=None):
+    """送一段话并以输入事件确认送达，返回输出；被拒绝或没确认上时抛 CorralError。"""
+    st = st or agent_status(name)
     known = st["kind"] in agents.ADAPTERS
     if known and st["state"] != "idle":
-        raise CorralError(EXIT_NOT_IDLE, "not_idle", f"{args.name} is {st['state']}, not idle",
-                          name=args.name, state=st["state"])
-    body = args.text.encode()
+        raise CorralError(EXIT_NOT_IDLE, "not_idle", f"{name} is {st['state']}, not idle",
+                          name=name, state=st["state"])
+    body = text.encode()
     if known and st["_pen"]["bracketed_paste"]:
         body = b"\x1b[200~" + body + b"\x1b[201~"
     t0 = time.time()
-    reply = client.request(args.name, "send", digest=events.digest(args.text), force=args.force, chunks=[
+    reply = client.request(name, "send", digest=events.digest(text), force=force, chunks=[
         {"data": base64.b64encode(body).decode(), "delay": ENTER_DELAY},
         {"data": base64.b64encode(b"\r").decode()}])
     if reply is None:
-        raise client.not_found(args.name)
+        raise client.not_found(name)
     if not reply.get("ok"):
         if reply.get("error") == "human_active":
-            raise CorralError(EXIT_HUMAN_ACTIVE, "human_active", reply.get("message", ""), name=args.name,
+            raise CorralError(EXIT_HUMAN_ACTIVE, "human_active", reply.get("message", ""), name=name,
                               last_human_input=reply.get("last_human_input"))
-        raise CorralError(EXIT_ERROR, reply.get("error", "pen_error"), reply.get("message", ""), name=args.name)
+        raise CorralError(EXIT_ERROR, reply.get("error", "pen_error"), reply.get("message", ""), name=name)
     if not known:
-        emit({"ok": True, "name": args.name, "instance": st["instance"], "confirmed": False})
-        return EXIT_OK
-    want = events.digest(args.text)
-    deadline = time.time() + args.timeout
+        return {"ok": True, "name": name, "instance": st["instance"], "confirmed": False}
+    want = events.digest(text)
+    deadline = time.time() + timeout
     while True:
-        snap = events.read(paths.pen_dir(args.name), st["instance"], client.meta(args.name).get("cwd"))
+        snap = events.read(paths.pen_dir(name), st["instance"], client.meta(name).get("cwd"))
         merged = None
         if any(i["digest"] == want and i["t"] >= t0 for i in snap["inputs"]):
             merged = False
         elif (snap["inputs"] and snap["inputs"][-1]["t"] >= t0 and snap.get("last_prompt")
-              and events.normalize(args.text) and events.normalize(args.text) in events.normalize(snap["last_prompt"])):
+              and events.normalize(text) and events.normalize(text) in events.normalize(snap["last_prompt"])):
             merged = True  # 输入框里原有没提交的文字，和送出的一起提交了：agent 收到了，不能让调用方重送
         if merged is not None:
-            emit({"ok": True, "name": args.name, "instance": st["instance"], "confirmed": True,
-                  "merged_with_draft": merged, "latency": round(time.time() - t0, 3)})
-            return EXIT_OK
+            return {"ok": True, "name": name, "instance": st["instance"], "confirmed": True,
+                    "merged_with_draft": merged, "latency": round(time.time() - t0, 3)}
         if time.time() >= deadline:
             # 不补发任何按键：此刻屏幕上可能是菜单或对话框（DESIGN 第 12 节难点 6）
             raise CorralError(EXIT_NOT_DELIVERED, "not_delivered",
-                              f"no input event for the sent text within {args.timeout:g}s",
-                              name=args.name, instance=st["instance"])
+                              f"no input event for the sent text within {timeout:g}s",
+                              name=name, instance=st["instance"])
         time.sleep(0.1)
+
+
+def cmd_send(args):
+    if args.after is not None:
+        return send_after(args)
+    emit(deliver(args.name, args.text, args.force, SEND_TIMEOUT if args.timeout is None else args.timeout))
+    return EXIT_OK
+
+
+def send_after(args):
+    """立即返回；脱离出去的进程等另一个 agent 这一轮结束，再把话送进来（DESIGN 13.4）。"""
+    if args.timeout is None:
+        raise CorralError(EXIT_ERROR, "usage", "--after needs an explicit --timeout")
+    paths.validate_name(args.after)
+    target = client.require(args.name, "status")
+    other = client.require(args.after, "status")
+    detach(lambda: _after_worker(args, target["instance"], other["instance"]))
+    emit({"ok": True, "name": args.name, "instance": target["instance"], "after": args.after,
+          "after_instance": other["instance"], "pending": True})
+    return EXIT_OK
+
+
+def _after_worker(args, instance, after_instance):
+    try:
+        turn_end(args.after, args.timeout, instance=after_instance)
+    except CorralError:
+        pass  # 对方退出了、版本不兼容、等满超时：都照样送，由收到的一方自己去查
+    deadline = time.time() + args.timeout
+    while True:
+        try:
+            st = agent_status(args.name)
+            if st["instance"] != instance:
+                return  # 收话的一方被重新启动过：不把话塞给一个毫不知情的新对话
+            deliver(args.name, args.text, args.force, SEND_TIMEOUT, st)
+            return
+        except CorralError as e:
+            # 不在了、送出后没确认上（不重送，免得重复）、其他错误：放弃
+            if e.exit_code not in (EXIT_NOT_IDLE, EXIT_HUMAN_ACTIVE) or time.time() >= deadline:
+                return
+        time.sleep(AFTER_RETRY)
+
+
+def detach(fn):
+    """两次 fork 脱离出一个进程运行 fn，和栏位的做法一样：不受调用方的会话、终端、命令工具影响。"""
+    sys.stdout.flush()
+    sys.stderr.flush()
+    child = os.fork()
+    if child != 0:
+        os.waitpid(child, 0)
+        return
+    try:
+        os.setsid()
+        if os.fork() != 0:
+            os._exit(0)
+        os.chdir("/")
+        null = os.open(os.devnull, os.O_RDWR)
+        for fd in (0, 1, 2):
+            os.dup2(null, fd)
+        os.closerange(3, 1024)
+        fn()
+    except BaseException:  # noqa: BLE001  （脱离出去的进程没有地方报错，出错就是少一次送话）
+        pass
+    finally:
+        os._exit(0)
 
 
 def cmd_keys(args):
@@ -207,31 +273,38 @@ def cmd_keys(args):
 
 
 def cmd_wait(args):
-    deadline = time.time() + args.timeout
+    result, st = turn_end(args.name, args.timeout, args.quiet)
+    emit({**public(st), "result": result})
+    return EXIT_OK
+
+
+def turn_end(name, timeout, quiet=None, instance=None):
+    """等 agent 这一轮结束，返回 (结果, 状态)。结果：idle / blocked / stopped-quiet / unknown；
+    给了 instance 且实例编号变了，返回 restarted。超时抛 timeout。"""
+    deadline = time.time() + timeout
     stable = None
     while True:
-        st = agent_status(args.name)
+        st = agent_status(name)
+        if instance is not None and st["instance"] != instance:
+            return "restarted", st
         if st["kind"] not in agents.ADAPTERS:
-            emit({**public(st), "result": "unknown"})
-            return EXIT_OK
+            return "unknown", st
         key = (st["state"], st["last_event"], st["last_event_at"])
         if st["state"] in ("idle", "blocked"):
             if stable and stable[0] == key and time.time() - stable[1] >= WAIT_STABLE:
-                emit({**public(st), "result": st["state"]})
-                return EXIT_OK
+                return st["state"], st
             if not stable or stable[0] != key:
                 stable = (key, time.time())
         else:
             stable = None
-            if st["state"] == "working" and args.quiet is not None:
+            if st["state"] == "working" and quiet is not None:
                 last_activity = max(st["last_output"] or 0, st["last_event_at"] or 0)
-                if time.time() - last_activity >= args.quiet:
-                    emit({**public(st), "result": "stopped-quiet"})
-                    return EXIT_OK
+                if time.time() - last_activity >= quiet:
+                    return "stopped-quiet", st
         if time.time() >= deadline:
             hint = (" (start not finished: the agent may be showing a dialog; attach to look)"
                     if st["state"] == "starting" else "")
-            raise CorralError(EXIT_TIMEOUT, "timeout", f"{args.name} still {st['state']} after {args.timeout:g}s{hint}",
+            raise CorralError(EXIT_TIMEOUT, "timeout", f"{name} still {st['state']} after {timeout:g}s{hint}",
                               **public(st))
         time.sleep(WAIT_POLL)
 

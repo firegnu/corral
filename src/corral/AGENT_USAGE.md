@@ -4,6 +4,8 @@ corral 让你开启别的交互式编程 agent（Claude Code、Codex），给它
 
 所有命令输出一行 JSON，看 `ok` 和退出码。完整契约见 corral 仓库的 docs/CONTRACT.md。**不要读 corral 状态目录里的任何文件。**
 
+**你自己也必须是用 corral 启动的。** 环境变量 `CORRAL_NAME` 就是你自己的名字；它为空时不要委派，告诉人先用 `corral start` 启动你、再 `corral attach` 进来。
+
 ## 临时委派：开一个 agent，问一个问题
 
 ```sh
@@ -29,6 +31,21 @@ corral stop <名字>
 临时 agent 不会自己退出，用完记得 `stop`；`corral ls` 看还开着哪些。
 
 **一个 agent 只走一条通道**：用 corral 开的 agent 仍然是一个普通的 agent 会话，别的渠道（会话之间的消息、子 agent 工具）也能碰到它，但 corral 看不见那些输入。送话、等待、停止都只用 corral，不要混用；否则状态和「最近一次输入的来源」会失真，`wait` 和 `reply` 会对不上。
+
+## 长任务：交出去不等，做完被提醒
+
+要跑很久，或者人说「做完告诉我」，就不要在前台 `wait`：
+
+```sh
+corral start demo/ask --unique --cwd <仓库目录> --prompt "<你的问题>" -- codex --yolo
+corral send "$CORRAL_NAME" "<提醒的话>" --after <名字> --timeout 3600
+```
+
+- 交给对方的话末尾加上「命令都在前台跑完，全部做完后，回复最后一行写 DONE」。
+- 提醒的话写成「<名字> 这一轮结束了，去看它的状态和回复」。`send --after` 立即返回；告诉人已经交出去，然后结束这一轮。
+- 对方这一轮结束（或卡在对话框、退出、等满 `--timeout`）时，这句话会像人打字一样送进你的输入框；你正在干活、人刚在你的窗口里操作过时，它会等一会儿再送。
+- 收到后 `corral status <名字>`、`corral reply <名字>`：回复最后一行是 DONE，取结果；对方又在干活，是被叫早了，再挂一次 `send --after`；没有 DONE 但对方已经停了，告诉人去 attach 看。
+- corral 只知道「这一轮结束」，不知道「做完」，所以一定要靠 DONE 判断。
 
 ## 等待时要知道的
 

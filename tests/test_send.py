@@ -252,5 +252,85 @@ class KeysReplyPromptTest(AgentTestCase):
         self.assertEqual((code, out["error"]), (errors.EXIT_ERROR, "usage"))
 
 
+class SendAfterTest(AgentTestCase):
+    """send --after：立即返回，另一个 agent 这一轮结束后再送。"""
+
+    def idle(self, name):
+        self.states_until(name, lambda s: s.get("state") == "idle")
+
+    def woken(self, name, text, timeout=25):
+        self.states_until(name, lambda s: s.get("state") == "idle" and s.get("last_input_source") == "send",
+                          timeout=timeout)
+        self.assertEqual(self.cli("reply", name)[1]["text"], "echo: " + text)
+
+    def test_requires_explicit_timeout(self):
+        self.start("demo/a", "claude")
+        self.start("demo/b", "claude")
+        code, out = self.cli("send", "demo/a", "wake", "--after", "demo/b")
+        self.assertEqual((code, out["error"]), (errors.EXIT_ERROR, "usage"))
+
+    def test_both_agents_must_exist(self):
+        self.start("demo/a", "claude")
+        self.assertEqual(self.cli("send", "demo/a", "wake", "--after", "demo/none", "--timeout", "5")[0],
+                         errors.EXIT_NOT_FOUND)
+        self.assertEqual(self.cli("send", "demo/none", "wake", "--after", "demo/a", "--timeout", "5")[0],
+                         errors.EXIT_NOT_FOUND)
+
+    def test_returns_at_once_and_delivers_when_other_turn_ends(self):
+        self.start("demo/a", "claude")
+        self.idle("demo/a")
+        self.start("demo/b", "claude", script=["slow:3"])
+        self.states_until("demo/b", lambda s: s.get("state") == "working")
+        t0 = time.time()
+        code, out = self.cli("send", "demo/a", "wake-1", "--after", "demo/b", "--timeout", "30")
+        self.assertEqual(code, 0, out)
+        self.assertLess(time.time() - t0, 2)
+        self.assertEqual((out["pending"], out["after"]), (True, "demo/b"))
+        self.assertEqual(out["instance"], self.status("demo/a")["instance"])
+        self.assertEqual(out["after_instance"], self.status("demo/b")["instance"])
+        time.sleep(0.5)
+        self.assertIsNone(self.status("demo/a")["last_input_at"])
+        self.woken("demo/a", "wake-1")
+
+    def test_waits_until_target_is_idle(self):
+        self.start("demo/a", "claude", script=["slow:4"])
+        self.states_until("demo/a", lambda s: s.get("state") == "working")
+        self.start("demo/b", "claude")
+        self.idle("demo/b")
+        self.assertEqual(self.cli("send", "demo/a", "wake-2", "--after", "demo/b", "--timeout", "30")[0], 0)
+        self.woken("demo/a", "wake-2")
+
+    def test_delivers_when_other_agent_exits(self):
+        self.start("demo/a", "claude")
+        self.idle("demo/a")
+        self.start("demo/b", "claude", script=["hang"])
+        self.states_until("demo/b", lambda s: s.get("state") == "working")
+        self.assertEqual(self.cli("send", "demo/a", "wake-3", "--after", "demo/b", "--timeout", "30")[0], 0)
+        self.assertEqual(self.cli("stop", "demo/b")[0], 0)
+        self.woken("demo/a", "wake-3")
+
+    def test_delivers_after_timeout_when_other_never_ends(self):
+        self.start("demo/a", "claude")
+        self.idle("demo/a")
+        self.start("demo/b", "claude", script=["hang"])
+        self.states_until("demo/b", lambda s: s.get("state") == "working")
+        self.assertEqual(self.cli("send", "demo/a", "wake-4", "--after", "demo/b", "--timeout", "2")[0], 0)
+        self.woken("demo/a", "wake-4", timeout=15)
+        self.assertEqual(self.status("demo/b")["state"], "working")
+
+    def test_gives_up_when_target_restarted(self):
+        self.start("demo/a", "claude")
+        self.idle("demo/a")
+        self.start("demo/b", "claude", script=["slow:3"])
+        self.states_until("demo/b", lambda s: s.get("state") == "working")
+        self.assertEqual(self.cli("send", "demo/a", "wake-5", "--after", "demo/b", "--timeout", "30")[0], 0)
+        self.assertEqual(self.cli("stop", "demo/a")[0], 0)
+        self.start("demo/a", "claude")
+        self.idle("demo/a")
+        self.states_until("demo/b", lambda s: s.get("state") == "idle", timeout=15)
+        time.sleep(3)
+        self.assertIsNone(self.status("demo/a")["last_input_at"])
+
+
 if __name__ == "__main__":
     unittest.main()

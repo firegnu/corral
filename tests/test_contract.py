@@ -86,6 +86,7 @@ class ContractOutputTest(AgentTestCase):
         self.assertDocumented("reply", self.cli("reply", "demo/c")[1])
         self.assertDocumented("keys", self.cli("keys", "demo/c", "up")[1])
         self.assertDocumented("where", self.cli("where", "demo/c")[1])
+        self.assertDocumented("send", self.cli("send", "demo/c", "x", "--after", "demo/c", "--timeout", "5")[1])
         ls = self.cli("ls")[1]
         self.assertDocumented("ls", ls)
         for entry in ls["agents"]:
