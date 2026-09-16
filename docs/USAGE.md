@@ -8,7 +8,7 @@
 - **窗口只是观看者**。agent 由栏位托着，在哪个终端里看、看不看、关掉窗口，都不影响它跑。
 - **状态来自 agent 自己的钩子**，不读屏。所以 corral 知道它是 idle、working 还是 blocked，但不知道屏幕上现在画的是输入框还是菜单。
 - **实例编号**：同名 agent 退出后再开，名字一样、实例编号不同。脚本要核对它，别把话塞给一个毫不知情的新对话。
-- corral 只提供机制。「开谁、送什么、空闲后做什么」这些判断写在你自己的脚本里。
+- corral 只提供机制。「开谁、送什么、空闲后做什么」由上层决定：日常是对话里的 agent 自己判断，固定流程则是建在 corral 之上的 harness。
 
 ## 2. 安装与检查
 
@@ -52,7 +52,7 @@ corral attach --wait demo/alice   # 名字还不存在就等着，一出现自�
 - 第一个接入的窗口能打字，之后的只读；终端尺寸跟着能打字的那个走。
 - 在任意终端软件、任意标签里都能接，接完退出，换个终端再接，agent 不受影响。
 - 「让它自动出现在旁边」：先开个分屏挂 `attach --wait`，再 start。分屏由你的终端软件做，corral 不管布局。
-- 人在接入窗口里操作过之后的 30 秒内，脚本的 `send` 会避让（退出码 8）。只看不动不影响。
+- 人在接入窗口里操作过之后的 30 秒内，别的 agent 的 `send` 会避让（退出码 8）。只看不动不影响。
 
 ### 查
 
@@ -102,69 +102,45 @@ Claude Code 约 1 秒。Codex 用它自己的方式（连按两次 Ctrl-C）退�
 
 临时 agent 不会自己退出，用完记得 stop；`corral ls` 看还开着哪些。
 
-## 4. 多 agent 怎么配合
+## 4. 多 agent：在对话里开另一个 agent
 
-下面每种都在真实 agent 上验证过。名字自己起，示例用 `demo/` 前缀。
+corral 的日常用法不是写脚本，而是**对你手头的 agent 说一句话，它自己去开另一个 agent 干活**。前提是 skill 已装（第 2 节）。
 
-### 4.1 临时委派：开一个问一句
+### 怎么说
 
-```sh
-name=$(corral start demo/ask --unique --cwd ~/proj --prompt "请评审 src/parse.py 的错误处理" -- codex --yolo \
-       | python3 -c 'import json,sys; print(json.load(sys.stdin)["name"])')
-corral wait "$name" --timeout 600
-corral reply "$name"
-corral send "$name" "第二点再展开说说"      # 追问
-corral wait "$name" --timeout 600 && corral reply "$name"
-corral stop "$name"
-```
+对正在和你聊的 Claude Code 或 Codex 说：
 
-固定名字则是「接着上次的对话问」，`--unique` 是「每次一个干净的新对话」。装了 skill 的 agent 会自己走这四步。
+- 「开一个 Codex 看一下 `src/parse.py` 的错误处理，把它的意见告诉我。」
+- 「把这个方案交给另一个 Claude Code 核对一下，有分歧的地方列出来。」
+- 「再问它一下第二点。」（追问同一个 agent）
+- 「同时开三个，各审一个模块。」
+- 「问完把它关掉。」／「先留着，等会儿还要问。」
 
-### 4.2 常驻工作 agent + 叫醒脚本
+### 它会做什么
 
-一个 agent 一直开着干活，脚本在它空闲时给它送下一件事：
+1. `corral start` 开一个新 agent，名字自己起（如 `demo/ask-3`），第一句用 `--prompt` 带过去。
+2. `wait` 等对方答完，`reply` 取回复原文，整理后告诉你。
+3. 要追问就 `send` 再等；用完 `stop`。留着不关的，下次接着问同一个名字。
 
-```sh
-#!/bin/sh
-# wake <名字> <话>：等到 idle 再送；实例变了就不送
-name=$1; text=$2
-inst() { corral status "$1" | python3 -c 'import json,sys; print(json.load(sys.stdin)["instance"])'; }
-want=$(inst "$name") || exit 2
-while :; do
-  [ "$(inst "$name")" = "$want" ] || { echo instance_changed; exit 3; }
-  corral send "$name" "$text"; code=$?
-  case $code in
-    0) exit 0 ;;
-    7|8) sleep 5 ;;      # 还在忙 / 人刚操作过：稍后再试
-    *) exit $code ;;     # 3 没送到、2 不在了：交给人
-  esac
-done
-```
+它开出来的 agent 是独立的会话，有自己的上下文，看不到你和它的对话。所以要交代清楚的内容，让它在提示里写全，或者先写进文件再让对方「读某某文件」。长材料一律走文件。
 
-要点：先记实例编号；7 和 8 是「等一等」，3 不要盲目重试。
+### 你怎么看、怎么插手
 
-### 4.3 请求 / 交付：靠文件交接
+- `corral ls` 列出它开了哪些；agent 也会告诉你名字。
+- 想盯着看：`corral attach <名字>`，或事先在旁边挂 `corral attach --wait demo/ask`，它一开就自动出现。接进去可以直接和对方说话；接完 Ctrl-] 退出，不影响它们继续。
+- 对方弹了权限框或提问框：agent 会告诉你「blocked，请接入处理」，不会替对方点。你 attach 进去点完，它接着等。
+- 对方卡在启动对话框里：状态一直是 `starting`，同样接入处理。
 
-A 把请求写进文件，脚本开 B 去做，B 写结果文件并在最后一行放哨兵，脚本等 B 结束后叫醒 A：
+### 两条边界
 
-```sh
-corral start demo/review --cwd ~/proj-wt --prompt "读 request.md，把结论写进 findings.md，最后一行写 DONE" -- codex --yolo
-corral wait demo/review --timeout 900
-tail -1 ~/proj-wt/findings.md | grep -q '^DONE$' \
-  && corral send demo/alice "findings.md 已交付，请处理" \
-  || echo undelivered
-```
+- agent 只碰它自己开的，不会给 `corral ls` 里别人开的送话，也不会 stop 它们。
+- 一个 agent 只走一条通道：用 corral 开的，就只通过 corral 跟它说话，不再用别的渠道（会话之间的消息、子 agent 工具）碰它。
 
-- B 的工作目录可以是同一仓库的 worktree，两边互不干扰。
-- 要验的要求写进送出去的那句话里，写在文件里的附加要求容易被忽略。
-- B 可以固定名字反复复用（下一轮 `send` 新请求），也可以每轮 stop 再 start。预先挂着的 `attach --wait` 会在每次 start 时自动接上。
-- 交付判定靠哨兵行，别靠 idle：idle 只说明这一轮结束，不说明做完了。
+### 需要固定流程时
 
-### 4.4 同时开几个
+评审循环、请求和交付的交接、自动叫醒之类的固定流程，属于建在 corral 之上的 harness，不属于 corral，也不在这份文档里展开。corral 只提供命令，流程由 harness 决定。
 
-`--unique` 起几个就是几个，各自独立，互不串扰。不同项目用不同前缀（`proj-a/…`、`proj-b/…`），`corral ls` 一眼分清。
-
-## 5. 写脚本时的规矩
+## 5. 规矩
 
 - **一个 agent 只走一条通道**。用 corral 开的 agent，送话、等待、停止都只用 corral。它仍然是普通会话，别的渠道（会话之间的消息、子 agent 工具）也能碰到它，但 corral 看不见那些输入，混用后状态和输入来源都会失真。
 - **只碰自己开的**。`corral ls` 里别人开的不要送话，更不要 stop。
@@ -172,7 +148,7 @@ tail -1 ~/proj-wt/findings.md | grep -q '^DONE$' \
 - **不替 agent 回答对话框**，`blocked` 交给人接入处理。
 - `read` 是累积输出不是当前画面，判断屏幕只看尾部，而且只作排查，不要靠它做决定。
 
-退出码速查：
+退出码速查（agent 报出退出码时对照）：
 
 | 码 | 含义 | 怎么办 |
 |---|---|---|
