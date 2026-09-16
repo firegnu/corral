@@ -18,7 +18,7 @@ corral --version                               # {"ok": true, "version": "…", 
 corral install-skills                          # 把 skill 装进 Claude Code 和 Codex，会先列路径再问 y/N
 ```
 
-skill 装好后，任何 Claude Code 或 Codex 会话里说「开一个 Codex 看一下」「交给另一个 agent」，它就会自己用 corral 去开。SKILL.md 改了才需要重装。
+装好 skill 后，一个 agent（不管它自己是怎么开的）听到「开一个 Codex 看一下」「交给另一个 agent」这类说法，会按 skill 的指引用 `corral start` 开一个新 agent、送话、等回复。触发靠 skill 描述里的说法，不是硬规则。委派方如果是 Codex，本身要 `--yolo` 启动，沙箱里用不了 corral。skill 是全局的，对这台机器上所有 agent 生效；只想给某个项目用，改用 `corral install-skills --project <目录>`。SKILL.md 改了才需要重装。
 
 所有命令输出一行 JSON，看 `ok` 和退出码。缩进看的话接 `| python3 -m json.tool`。
 
