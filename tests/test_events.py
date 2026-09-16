@@ -188,6 +188,44 @@ class FormatVersionTest(EventsTestCase):
             self.read()
         self.assertEqual(cm.exception.exit_code, errors.EXIT_INCOMPATIBLE)
 
+    def test_cursor_written_by_other_format_is_incompatible(self):
+        # 另一个版本的 corral（只认格式 2）先读过一遍并写下 cursor，本版本不能因为「有进度可用」就跳过格式检查
+        self.append(json.dumps({"v": 2, "t": 1.0, "ev": "Stop", "inst": INST}) + "\n")
+        orig, events.EVENT_FORMATS = events.EVENT_FORMATS, (2,)
+        try:
+            self.read()
+        finally:
+            events.EVENT_FORMATS = orig
+        with self.assertRaises(errors.CorralError) as cm:
+            self.read()
+        self.assertEqual(cm.exception.exit_code, errors.EXIT_INCOMPATIBLE)
+
+    def test_cursor_records_consumed_format_not_reader_capability(self):
+        # 事件全是 v1，被同时认 (1,2) 的命令读过：cursor 记的是「快照由哪个格式算出」，只认 (1,) 的命令照常能用
+        self.append(self.start_main())
+        orig, events.EVENT_FORMATS = events.EVENT_FORMATS, (1, 2)
+        try:
+            self.read()
+        finally:
+            events.EVENT_FORMATS = orig
+        self.append(self.ev("UserPromptSubmit", prompt="x"))
+        self.assertEqual(self.read()["state"], "working")
+
+    def test_cursor_without_format_field_is_format_1(self):
+        # 加字段之前写下的 cursor：那时只有格式 1，照常用，不从头重算；读过一次之后补上字段
+        self.append(self.start_main())
+        self.read()
+        cursor = os.path.join(self.dir, "cursor")
+        with open(cursor, encoding="utf-8") as f:
+            snap = json.load(f)
+        snap.pop("fmt", None)
+        with open(cursor, "w", encoding="utf-8") as f:
+            json.dump(snap, f)
+        self.append(self.ev("UserPromptSubmit", prompt="x"))
+        self.assertEqual(self.read()["state"], "working")
+        with open(cursor, encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["fmt"], 1)
+
     def test_every_supported_format_has_readable_fixture(self):
         for version in events.EVENT_FORMATS:
             with self.subTest(version=version):

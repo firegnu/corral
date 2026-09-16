@@ -25,7 +25,10 @@ def digest(text):
 
 
 def fresh(instance):
-    return {"cursor": CURSOR_VERSION, "inst": instance, "offset": 0, "main_session": None, "other_sessions": [],
+    # fmt：这份快照是从哪个格式的事件算出来的（已消费事件里 v 的最大值），不是写 cursor 的 corral 的能力上限；
+    # 否则事件全是 v1 的栏位被新命令读过一次，旧命令就再也读不动。还没消费任何事件时取本版本认识的最老格式。
+    return {"cursor": CURSOR_VERSION, "fmt": min(EVENT_FORMATS), "inst": instance, "offset": 0,
+            "main_session": None, "other_sessions": [],
             "pending": [], "state": "starting", "last_tool": None, "turn_started": None, "last_event": None,
             "last_event_t": None, "inputs": [], "input_count": 0, "reply": None, "reply_t": None}
 
@@ -99,6 +102,17 @@ def _load_cursor(path, instance, size):
     if (not isinstance(snap, dict) or snap.get("cursor") != CURSOR_VERSION or snap.get("inst") != instance
             or not isinstance(snap.get("offset"), int) or snap["offset"] > size):
         return fresh(instance)
+    # cursor 是各版本 corral 共用的：另一个版本读过之后把进度推到文件末尾，本版本就一行事件都读不到，
+    # 逐行的格式检查形同虚设。所以 cursor 里记下快照是按哪个事件格式算的，不认识就直接拒绝——不能退回 fresh
+    # 从头重读（几十 MB 白读一遍，最后还是在第一行拒绝）。不能靠 CURSOR_VERSION 顶替：只改事件格式时
+    # CURSOR_VERSION 不变，之前就是这么漏的。没有 fmt 字段的 cursor 是加这个字段之前写的，那时只有格式 1，
+    # 补上之后随下一次写回落盘。
+    fmt = snap.get("fmt", 1)
+    if fmt not in EVENT_FORMATS:
+        raise CorralError(EXIT_INCOMPATIBLE, "incompatible",
+                          f"event format version {fmt!r} is not supported by this corral "
+                          f"(supported: {list(EVENT_FORMATS)}); stop and start the agent again")
+    snap["fmt"] = fmt
     return snap
 
 
@@ -156,4 +170,5 @@ def _consume_line(snap, line, instance, cwd):
         raise CorralError(EXIT_INCOMPATIBLE, "incompatible",
                           f"event format version {e.get('v')!r} is not supported by this corral "
                           f"(supported: {list(EVENT_FORMATS)}); stop and start the agent again")
+    snap["fmt"] = max(snap["fmt"], e["v"])
     _apply(snap, e, cwd)
