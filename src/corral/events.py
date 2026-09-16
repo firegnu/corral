@@ -19,9 +19,12 @@ READ_BLOCK = 1024 * 1024
 CURSOR_VERSION = 2
 
 
+def normalize(text):
+    return text.replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
 def digest(text):
-    norm = text.replace("\r\n", "\n").replace("\r", "\n").strip()
-    return hashlib.sha256(norm.encode("utf-8")).hexdigest()
+    return hashlib.sha256(normalize(text).encode("utf-8")).hexdigest()
 
 
 def fresh(instance):
@@ -30,7 +33,8 @@ def fresh(instance):
     return {"cursor": CURSOR_VERSION, "fmt": min(EVENT_FORMATS), "inst": instance, "offset": 0,
             "main_session": None, "other_sessions": [],
             "pending": [], "state": "starting", "last_tool": None, "turn_started": None, "last_event": None,
-            "last_event_t": None, "inputs": [], "input_count": 0, "reply": None, "reply_t": None}
+            "last_event_t": None, "inputs": [], "input_count": 0, "last_prompt": None, "reply": None,
+            "reply_t": None}
 
 
 def _same_dir(a, b):
@@ -51,6 +55,7 @@ def _update(snap, e):
         snap["state"], snap["turn_started"], snap["last_tool"] = "working", t, None
         snap["inputs"] = (snap["inputs"] + [{"t": t, "digest": digest(str(e.get("prompt", "")))}])[-MAX_INPUTS:]
         snap["input_count"] += 1
+        snap["last_prompt"] = str(e.get("prompt", ""))  # 只留最近一条原文：send 用来识别「和草稿拼在一起提交」
     elif ev in ("PreToolUse", "PostToolUse"):
         snap["state"] = "working"
         snap["last_tool"] = e.get("tool_name", snap["last_tool"])

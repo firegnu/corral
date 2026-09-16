@@ -19,7 +19,7 @@ class SendTest(AgentTestCase):
         text = "多行确认：\n  缩进的第二行\n```python\nprint('x')\n```"
         code, out = self.cli("send", "demo/c", text)
         self.assertEqual(code, 0, out)
-        self.assertTrue(out["confirmed"])
+        self.assertEqual((out["confirmed"], out["merged_with_draft"]), (True, False))
         code, st = self.cli("wait", "demo/c", "--timeout", "10")
         self.assertEqual((code, st["result"]), (0, "idle"))
         code, rep = self.cli("reply", "demo/c")
@@ -33,6 +33,17 @@ class SendTest(AgentTestCase):
         self.assertEqual(code, 0, out)
         self.cli("wait", "demo/x")
         self.assertEqual(self.cli("reply", "demo/x")[1]["text"], "echo: ?help first char")
+
+    def test_send_merged_with_unsubmitted_draft_is_confirmed(self):
+        # 输入框里留着没提交的文字，送出的话接在后面一起提交：agent 收到了，不能报 not_delivered 让调用方重送
+        self.start("demo/c", "claude")
+        self.idle("demo/c")
+        self.assertEqual(self.cli("keys", "demo/c", "text:draft ")[0], 0)
+        code, out = self.cli("send", "demo/c", "hello", "--force", "--timeout", "3")
+        self.assertEqual(code, 0, out)
+        self.assertEqual((out["confirmed"], out["merged_with_draft"]), (True, True))
+        self.cli("wait", "demo/c", "--timeout", "10")
+        self.assertEqual(self.cli("reply", "demo/c")[1]["text"], "echo: draft hello")
 
     def test_not_idle_refused(self):
         self.start("demo/c", "claude", script=["slow:3"])

@@ -6,11 +6,12 @@ import subprocess
 import sys
 import time
 import unittest
+from unittest import mock
 
 from tests import support
 from tests.test_agent_state import AgentTestCase
 from tests.test_attach import Window
-from corral import errors, protocol
+from corral import agents, cli, client, errors, protocol
 
 FIXTURES = os.path.join(support.ROOT, "tests", "fixtures")
 
@@ -48,12 +49,23 @@ class StopTest(AgentTestCase):
         self.assertEqual(code, 0, out)
         self.assertEqual((out["stopped_by"], out["exit_code"]), ("keys", 0))
 
+    def test_codex_graceful_wait_covers_measured_shutdown(self):
+        # corral-lab ISSUES 第 3 条实测：跑过三轮的 Codex 连按两次 Ctrl-C 后要 27.7 秒才自己退出，
+        # 而且随会话内容增长；等待留一倍余量，stop 命令的默认超时要盖住整条退出序列
+        steps = agents.quit_steps("codex")
+        self.assertGreaterEqual(max(st["wait"] for st in steps if "keys" in st), 55)
+        self.assertGreater(cli.build_parser().parse_args(["stop", "x"]).timeout, sum(st["wait"] for st in steps) + 3)
+
     def test_escalates_to_term_when_quit_keys_ignored(self):
+        # Codex 的正式等待是 60 秒，这里把等待缩短直接发给栏位，只测「按键没用就升级到 SIGTERM」
         self.start("demo/x", "codex", extra_env=["FAKE_IGNORE_CTRL_C=1"])
         time.sleep(0.5)
-        code, out = self.cli("stop", "demo/x")
-        self.assertEqual(code, 0, out)
-        self.assertEqual((out["stopped_by"], out["exit_code"]), ("SIGTERM", -signal.SIGTERM))
+        steps = [dict(st, wait=min(st["wait"], 1.0)) for st in agents.quit_steps("codex")]
+        with mock.patch.dict(os.environ, {"CORRAL_HOME": self.home}):
+            client.require("demo/x", "stop", steps=steps)
+            self.assertTrue(client.wait_gone("demo/x", 10))
+        info = exit_info(self.home, "demo/x")
+        self.assertEqual((info["stop_step"], info["code"]), ("SIGTERM", -signal.SIGTERM))
 
     def test_escalates_to_kill(self):
         code, out = self.cli("start", "demo/s", "--cwd", self.home, "--", "sh", "-c",

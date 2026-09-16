@@ -51,8 +51,9 @@
 
 - 用法：`corral send <名字> <文字> [--force] [--timeout 秒]`
 - 选项：`--force` `--timeout`
-- 输出字段：`ok` `name` `instance` `confirmed` `latency`
+- 输出字段：`ok` `name` `instance` `confirmed` `merged_with_draft` `latency`
 - 送一段话（可以多行）并按回车，**以 agent 的输入事件里的文字和送出的一致为送达确认**，`confirmed: true`。`--timeout` 默认 15 秒。
+- 输入框里原有没提交的文字（人留下的草稿）时，送出的文字会和它拼在一起提交：只要送出之后的最近一条输入事件里**包含**送出的文字，也算送达，`merged_with_draft: true`（正常送达时为 `false`）。agent 收到的是拼接后的内容，调用方如果在意，让人接入去看；**不要重送**。
 - 拒绝：状态不是 `idle` → 退出码 7（附 `state`）；最近 30 秒内有人在接入窗口里操作过（按键、粘贴、鼠标点击 / 拖动 / 滚轮；终端自动发回的应答和鼠标只是移动不算）→ 退出码 8（附 `last_human_input`），稍后重试或加 `--force`。只是开着窗口看、没操作，照常送。
 - 超时没确认 → 退出码 3。**corral 不补发任何按键**：此刻屏幕上可能是菜单或对话框，补发的回车可能被当成选择。
 - 不认识的 agent：照样写入并回车，`confirmed: false`，不检查状态。
@@ -125,8 +126,8 @@
 - 选项：`--timeout`
 - 输出字段：`ok` `name` `instance` `exit_code` `stopped_by`
 - 先用这种 agent 自己的退出方式，不行再依次升级到信号，最后总是 SIGKILL；**等到 agent 真正退出、名字可以立刻重新 start 才返回**。`stopped_by` 是最后执行到的一步：`keys`、`SIGHUP`、`SIGTERM`、`SIGKILL`。`exit_code` 为负数表示被信号结束。
-- 各种 agent 的顺序：Claude Code：SIGHUP → SIGTERM；Codex：连按两次 Ctrl-C，等它收尾（最多约 20 秒）→ SIGTERM（Codex 不理 SIGHUP）；不认识的：SIGHUP → SIGTERM。
-- `--timeout` 默认 30 秒，超时退出码 4（栏位仍会继续升级到 SIGKILL）。
+- 各种 agent 的顺序：Claude Code：SIGHUP → SIGTERM；Codex：连按两次 Ctrl-C，等它收尾（最多 60 秒；收尾时间随会话内容增长，实测跑过几轮后要近 30 秒，期间没有输出）→ SIGTERM（Codex 不理 SIGHUP）；不认识的：SIGHUP → SIGTERM。
+- `--timeout` 默认 90 秒（盖住最长的退出序列），超时退出码 4（栏位仍会继续升级到 SIGKILL）。
 - agent 自己脱离出去的后台进程（不在它的进程组里）不清。
 
 ### `corral install-skills`

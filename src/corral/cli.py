@@ -70,7 +70,7 @@ def build_parser():
 
     s = sub.add_parser("stop")
     s.add_argument("name")
-    s.add_argument("--timeout", type=float, default=30.0)
+    s.add_argument("--timeout", type=float, default=90.0)  # 要盖住最长的退出序列（Codex：0.3 + 60 + 3 秒）
 
     sub.add_parser("guide")
 
@@ -176,9 +176,15 @@ def cmd_send(args):
     deadline = time.time() + args.timeout
     while True:
         snap = events.read(paths.pen_dir(args.name), st["instance"], client.meta(args.name).get("cwd"))
+        merged = None
         if any(i["digest"] == want and i["t"] >= t0 for i in snap["inputs"]):
+            merged = False
+        elif (snap["inputs"] and snap["inputs"][-1]["t"] >= t0 and snap.get("last_prompt")
+              and events.normalize(args.text) and events.normalize(args.text) in events.normalize(snap["last_prompt"])):
+            merged = True  # 输入框里原有没提交的文字，和送出的一起提交了：agent 收到了，不能让调用方重送
+        if merged is not None:
             emit({"ok": True, "name": args.name, "instance": st["instance"], "confirmed": True,
-                  "latency": round(time.time() - t0, 3)})
+                  "merged_with_draft": merged, "latency": round(time.time() - t0, 3)})
             return EXIT_OK
         if time.time() >= deadline:
             # 不补发任何按键：此刻屏幕上可能是菜单或对话框（DESIGN 第 12 节难点 6）
