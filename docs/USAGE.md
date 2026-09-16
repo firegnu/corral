@@ -26,12 +26,15 @@ skill 装好后，任何 Claude Code 或 Codex 会话里说「开一个 Codex �
 
 ### 开
 
+**必须用 `corral start` 开。** 直接在终端里敲 `claude` 或 `codex --yolo` 开的 agent，corral 完全看不见：没有栏位托着它，钩子也没注入，`ls`、`send`、`attach` 都找不到它。
+
 ```sh
 corral start demo/alice --cwd ~/proj -- claude
 corral start demo/alice --cwd ~/proj -- codex --yolo
 corral start demo/ask --unique --cwd ~/proj --prompt "看一下这个想法：……" -- claude
 ```
 
+- `start` 立即返回一行 JSON，agent 在后台的栏位里跑，此时你看不到它的界面。想像平时那样面对面用，就紧接着 `corral attach demo/alice`；或者预先在旁边挂一个 `corral attach --wait demo/alice`，start 一完成就自动接上。
 - `--` 后面是 agent 的完整命令，模型等参数照常跟在后面，如 `-- claude --model haiku`。
 - Codex 一律 `--yolo`：它默认开沙箱，沙箱里连不上 corral，也写不了仓库外的文件。
 - `--prompt` 是第一句话，由 agent 自己提交。**新开的 agent 送第一句只能走这里**，Codex 在第一次提交前没有任何事件，`send` 会被拒。
