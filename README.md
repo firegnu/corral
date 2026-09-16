@@ -9,7 +9,9 @@
 - 状态靠 agent 自己的钩子，不读屏。
 - 只用 Python 标准库。
 
-状态：设计完成，试验未开始。
+状态：正式版完成，真实 agent 冒烟和手工测试通过，进入日常使用。
 
+- 使用指南（给人看）：[docs/USAGE.md](docs/USAGE.md)
+- 对外契约：[docs/CONTRACT.md](docs/CONTRACT.md)
 - 设计：[docs/DESIGN.md](docs/DESIGN.md)
 - 试验清单：[docs/SPIKE.md](docs/SPIKE.md)
