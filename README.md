@@ -14,4 +14,5 @@
 - 使用指南（给人看）：[docs/USAGE.md](docs/USAGE.md)
 - 对外契约：[docs/CONTRACT.md](docs/CONTRACT.md)
 - 设计：[docs/DESIGN.md](docs/DESIGN.md)
+- 路线图：[docs/ROADMAP.md](docs/ROADMAP.md)
 - 试验清单：[docs/SPIKE.md](docs/SPIKE.md)
