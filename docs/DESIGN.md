@@ -13,7 +13,7 @@
 - **不认识任何具体的上层工具。** 名字是调用方给的普通字符串（如 `demo/alice`），corral 不解释含义。代码、文档、测试里不出现任何具体流程的概念。
 - **对外只有一个契约**：`corral` 命令、它的 JSON 输出、它的退出码。契约文档带版本号。调用方**不许读 corral 的内部文件**（元数据、事件文件、socket），内部格式随时可改。
 - **保留 agent 自己的交互界面。** 不走无头模式，不用编辑器协议替代 agent 的终端界面。
-- **零依赖**：只用 Python 标准库；不依赖 tmux、herdr 或任何现成的终端工具。唯一例外是钩子载体：某家 agent 只接受特定语言的扩展时（目前是 pi 的 TypeScript 扩展），钩子文件用那种语言写，但不引入任何依赖（2026-09-17 人确认）。
+- **零依赖**：只用 Python 标准库；不依赖 tmux、herdr 或任何现成的终端工具。唯一例外是钩子载体：某家 agent 只接受特定语言的扩展时（目前是 pi 和 omp 的 TypeScript 扩展），钩子文件用那种语言写，但不引入任何依赖（2026-09-17 人确认）。
 
 AI 编程的三样东西：agent 是租来的；harness 是调用方自己的、值得精雕；终端这一层 corral 拿回来，但**只求够用：送得进、看得见、挂不了**。
 
@@ -116,6 +116,7 @@ herdr 是两套东西：常驻后台服务（工作区、标签、窗格、按�
       sock                     ← 0600；栏位在这里监听；连得上 = 还活着
       hook.py                  ← 0600；start 时从 corral 复制过来的钩子脚本，钩子只运行这一份（Claude Code、Codex）
       hook_pi.ts               ← 0600；pi 的钩子扩展副本，pi 用 --extension 加载这一份（pi 的栏位只有它，没有 hook.py）
+      hook_omp.ts              ← 0600；omp 的钩子扩展副本，同上
       events                   ← 0600；钩子往这里追加（里面有送出去的原文和回复原文；agent 内部子会话也会写进来，按 session_id 区分）
       cursor                   ← 0600；命令侧读事件的进度和算好的状态快照，见下
       exit.json                ← 0600；agent 退出后记下退出码
@@ -279,7 +280,7 @@ agent A
 
 ## 12. agent 适配
 
-认识 Claude Code、Codex 和 pi、给它们配钩子，是 corral 的基础设施能力。
+认识 Claude Code、Codex、pi 和 omp、给它们配钩子，是 corral 的基础设施能力。
 
 以下是 2026-09-15 在 Claude Code 2.1.272、Codex 0.154 上实测的结论（证据见 SPIKE.md）。
 
@@ -323,6 +324,20 @@ agent A
 - 实测通过：`--prompt` 首句 3 s 内答完；多行送话确认送达、回复逐字一致；调用工具时 working 并报出工具名；当委派方时用 `send --after` 交出任务、中途被插话、做完被提醒并取回结果。
 - 用户全局扩展出错会让 pi 一启动就退出（实测：一个调用已删除程序的全局扩展，让 pi 以退出码 1 退出，和 corral 无关），表现为 `start` 成功后立刻「不存在」。
 - 未实测：扩展弹框时的 blocked（只用假 agent 测过，真实触发要故意弹框）；只有目录里有 `.pi` 或 `.agents/skills` 时才弹的项目信任提示。
+
+**omp**（Oh My Pi，pi 的分支；2026-09-17 按 omp 18.2.2 实现，并用真实 omp 实测，模型 deepseek-v4-flash）
+- 和 pi 一样用 `--extension <文件>` 加载钩子扩展 `hook_omp.ts`，扩展写法同源，但事件有四处不同，不能复用 pi 那份：
+  - **没有 `agent_settled`**。回合结束只有 `agent_end`，之后可能自动继续或重试：`willContinue` 为真的不算结束；最后一条助手消息出错、且错误像是可重试的（限流、过载、网络等）时，多等 2.5 s 看会不会重试；其余情况去抖 250 ms。等待期间收到 `agent_start` 就取消。等到了才记回合结束，带最近一条助手消息的文字。
+  - **卡住**：`tool_approval_requested` → 权限提示类通知（blocked），`tool_approval_resolved` → 调用工具后；提问工具 `ask` 的开始 / 结束同样记为 blocked / 解除。其余工具照常记调用前 / 后。
+  - **有子会话**，扩展在子会话里也会收到事件。只写 `ctx.hasUI` 为真的主会话的事件。
+  - **切换会话**另有 `session_switch`，记为会话开始，`source` 用它给的原因。
+- 首句：`omp … -- "<首句>"`；启动即触发会话开始。
+- 在家目录启动时 omp 会自动换到临时目录，工作目录和栏位对不上，状态会停在 starting；不要用家目录当 `--cwd`，或者自己加 `--allow-home`。
+- omp 可能对工具调用要审批；当委派方时自己要能运行 corral 命令，启动时加 `--approval-mode yolo`（和 Codex 用 `--yolo` 同理）。
+- 实测通过（带 `--approval-mode yolo`）：`--prompt` 首句 4 s 答完；多行送话确认送达；调用工具时 working 并报出工具名；Esc 打断后 0.4 s 回到 idle（含去抖）；SIGHUP 0.1 s 退出；当委派方时用 `send --after` 交出任务、中途被插话、做完被提醒并取回结果。
+- **读 skill 的位置不同**：omp 默认只读项目里的 `.agents/skills/`，用户级的 `~/.agents/skills/` 要在 omp 自己的配置里显式打开。所以全局装的 corral skill，omp 默认读不到；用 `corral install-skills --project <目录>` 装到项目里，omp 在那个目录工作时就能读到。
+- 用户全局扩展出错同样会让 omp 启动即崩（实测：调用已删除程序的扩展），和 corral 无关。
+- 未实测：审批框和提问工具显示成 blocked（只用假 agent 和扩展单元测试测过）；可重试出错后的自动重试。
 
 **不认识的 agent**：也能打开和接入，状态报「未知」。
 

@@ -17,6 +17,7 @@ class LookupTest(unittest.TestCase):
         self.assertEqual(agents.for_command(["/opt/bin/claude", "--model", "haiku"]).kind, "claude")
         self.assertEqual(agents.for_command(["codex"]).kind, "codex")
         self.assertEqual(agents.for_command(["/Users/x/.bun/bin/pi"]).kind, "pi")
+        self.assertEqual(agents.for_command(["/opt/homebrew/bin/omp"]).kind, "omp")
         self.assertIsNone(agents.for_command(["sh", "-c", "x"]))
 
 
@@ -101,6 +102,25 @@ class PiTest(unittest.TestCase):
         for kind in ("claude", "codex"):
             self.assertEqual((agents.ADAPTERS[kind].hook_file, agents.ADAPTERS[kind].needs_hook_python),
                              ("hook.py", True))
+
+
+class OmpTest(unittest.TestCase):
+    HOOK = "/tmp/h/demo/o/hook_omp.ts"
+
+    def build(self, argv, prompt=None):
+        return agents.for_command(argv).build(argv, self.HOOK, prompt)
+
+    def test_extension_flag_loads_private_copy(self):
+        out = self.build(["omp", "--approval-mode", "yolo"])
+        self.assertEqual(out, ["omp", "--extension", self.HOOK, "--approval-mode", "yolo"])
+
+    def test_prompt_is_last_argument(self):
+        self.assertEqual(self.build(["omp"], prompt="-hi")[-2:], ["--", "-hi"])
+
+    def test_hook_file_and_quit(self):
+        omp = agents.ADAPTERS["omp"]
+        self.assertEqual((omp.hook_file, omp.needs_hook_python), ("hook_omp.ts", False))
+        self.assertEqual([st.get("signal") for st in agents.quit_steps("omp")], ["HUP", "TERM"])
 
 
 if __name__ == "__main__":

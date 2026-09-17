@@ -1,8 +1,8 @@
 """假 agent：按 Claude Code / Codex 的方式读启动参数里的钩子并执行，在伪终端里收输入、按剧本产生事件。
 
-种类由程序名决定（support.fake_agent 生成名为 claude / codex / pi 的包装脚本）。
-pi 不跑命令钩子：真 pi 加载 --extension 指定的 TypeScript 扩展，由扩展直接写事件文件。假 pi 按 hook_pi.ts 的映射
-直接写同样格式的事件（扩展本身的映射由 tests/test_pi_hook.py 用 bun / node 单独测）。
+种类由程序名决定（support.fake_agent 生成名为 claude / codex / pi / omp 的包装脚本）。
+pi、omp 不跑命令钩子：真 agent 加载 --extension 指定的 TypeScript 扩展，由扩展直接写事件文件。假 agent 按
+hook_pi.ts / hook_omp.ts 的映射直接写同样格式的事件（扩展本身由 tests/test_pi_hook.py、test_omp_hook.py 单独测）。
 
 提交的文字决定这一轮做什么：
   reply:<文字>     转圈 0.3 秒后回合结束，回复 <文字>
@@ -37,7 +37,7 @@ import uuid
 
 FLAVOR = globals().get("FAKE_FLAVOR") or os.path.basename(sys.argv[0])
 CODEX = FLAVOR == "codex"
-PI = FLAVOR == "pi"
+EXT = FLAVOR in ("pi", "omp")  # 靠 --extension 扩展直接写事件的 agent
 SPIN = "|/-\\"
 
 
@@ -89,7 +89,7 @@ class Agent:
         self.hooks, bypass, self.first_prompt, self.extension = parse_args(sys.argv[1:])
         log({"argv": sys.argv})
         self.hooks_enabled = not (CODEX and self.hooks and not bypass)
-        if PI:  # 扩展副本必须真的在栏位目录里，才算挂上了
+        if EXT:  # 扩展副本必须真的在栏位目录里，才算挂上了
             self.hooks_enabled = bool(self.extension and os.path.isfile(self.extension))
         self.sid = uuid.uuid4().hex
         self.session_started = False
@@ -108,7 +108,7 @@ class Agent:
     def fire(self, event, sid=None, **fields):
         if not self.hooks_enabled:
             return
-        if PI:
+        if EXT:
             self.fire_pi(event, **fields)
             return
         payload = {"session_id": sid or self.sid, "cwd": os.getcwd(), "hook_event_name": event,
@@ -259,7 +259,7 @@ class Agent:
         if CODEX:
             self.working = False
             self.fire("Interrupt")
-        if PI:  # 按 hook_pi.ts：打断后 agent_settled 照常触发，记为回合结束（真 pi 待实测）
+        if EXT:  # 按 hook_pi.ts：打断后 agent_settled 照常触发，记为回合结束（真 pi 待实测）
             self.working = False
             self.fire("Stop")
         # Claude Code 被打断时没有任何事件，状态停在 working；working 标志留着，界面不再输出
@@ -282,7 +282,7 @@ class Agent:
     def main(self):
         if CODEX:
             signal.signal(signal.SIGHUP, signal.SIG_IGN)  # 真 Codex 不理 SIGHUP
-        if PI:  # 真 pi 收到 SIGHUP 触发 session_shutdown 后退出
+        if EXT:  # 真 pi 收到 SIGHUP 触发 session_shutdown 后退出
             signal.signal(signal.SIGHUP, lambda *_: (self.fire("SessionEnd"), sys.exit(0)))
         attrs = termios.tcgetattr(0)
         tty.setraw(0)

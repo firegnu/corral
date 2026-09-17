@@ -12,4 +12,4 @@ corral = "corral.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-corral = ["hook.py", "hook_pi.ts", "AGENT_USAGE.md", "skill/SKILL.md"]
+corral = ["hook.py", "hook_pi.ts", "hook_omp.ts", "AGENT_USAGE.md", "skill/SKILL.md"]

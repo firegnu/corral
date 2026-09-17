@@ -12,7 +12,7 @@
 - **成功**：`{"ok": true, …}`，退出码 0。
 - **失败**：`{"ok": false, "error": "<标识>", "message": "<给人看的说明>", …附加字段}`，以对应退出码退出。附加字段视情况带 `name`、`instance`、`state`、`exited`、`last_human_input`、`proto` 等。
 - **沙箱**：除 `guide` 和 `--version` 外，所有命令发现自己在 Codex 沙箱里（环境变量 `CODEX_SANDBOX` 存在），立即以退出码 6 拒绝，不碰状态目录。沙箱里既起不了栏位，也连不上正在跑的栏位。
-- **名字**：用 `/` 分段；每段由字母、数字、`.`、`_`、`-` 组成，以字母或数字开头，不能是内部文件名（`lock`、`meta.json`、`sock`、`hook.py`、`hook_pi.ts`、`events`、`cursor`、`exit.json`、`pen.log`）。名字对应的 socket 路径超过系统限制（macOS 104 字节、Linux 108 字节）时，以 `path_too_long` 拒绝。
+- **名字**：用 `/` 分段；每段由字母、数字、`.`、`_`、`-` 组成，以字母或数字开头，不能是内部文件名（`lock`、`meta.json`、`sock`、`hook.py`、`hook_pi.ts`、`hook_omp.ts`、`events`、`cursor`、`exit.json`、`pen.log`）。名字对应的 socket 路径超过系统限制（macOS 104 字节、Linux 108 字节）时，以 `path_too_long` 拒绝。
 - **状态目录**：默认 `~/.corral`，可用环境变量 `CORRAL_HOME` 改；同一用户、同一台机器上的调用方看到的是同一个目录。agent 的环境里带着 `CORRAL_HOME`、`CORRAL_NAME`、`CORRAL_INSTANCE`，agent 里再调用 `corral` 看到的是同一个目录。
 - **时间**：所有时间字段都是 Unix 时间戳（秒，浮点数）；`idle_for` 是秒数。
 
@@ -39,12 +39,12 @@
 - 输出字段：`ok` `name` `instance` `kind` `warnings`
 - 拉起 agent，返回名字和实例编号（12 位十六进制）。同名 agent 已在跑时退出码 5。
 - `--unique`：把名字当前缀，自动补不重复的后缀，如 `demo/ask-3`；以输出里的 `name` 为准。
-- `--prompt`：第一句话，作为启动参数交给 agent，由 agent 自己提交。**新开的 agent 送第一句话只能用它**（Codex 在第一次提交前没有任何事件，`send` 会被拒绝）。只支持 Claude Code、Codex 和 pi。
+- `--prompt`：第一句话，作为启动参数交给 agent，由 agent 自己提交。**新开的 agent 送第一句话只能用它**（Codex 在第一次提交前没有任何事件，`send` 会被拒绝）。只支持 Claude Code、Codex、pi 和 omp。
 - `--env KEY=VALUE`：给 agent 补充或覆盖环境变量（`CORRAL_*` 盖不掉）。
-- `kind`：`claude`、`codex`、`pi`，或不认识时的程序名。
+- `kind`：`claude`、`codex`、`pi`、`omp`，或不认识时的程序名。
 - 环境：agent 的环境取自用户的登录 shell（和用户新开终端时一致），调用方自己的环境不会传下去。取不到时退回最小环境，`warnings` 里说明。
-- 钩子：Claude Code 用 `--settings`、Codex 用 `-c`、pi 用 `--extension` 加钩子，只对这一个 agent 生效，不写任何全局配置。Codex 同时带上 `--dangerously-bypass-hook-trust`：否则 Codex 启动时会要求人工审核这些钩子，点「信任」会把钩子写进用户的全局配置。
-- Claude Code、Codex 的钩子由 `/usr/bin/python3` 运行；它不可用时以 `hook_python_unavailable` 拒绝。pi 的钩子是 pi 自己加载的扩展，不需要它。
+- 钩子：Claude Code 用 `--settings`、Codex 用 `-c`、pi 和 omp 用 `--extension` 加钩子，只对这一个 agent 生效，不写任何全局配置。Codex 同时带上 `--dangerously-bypass-hook-trust`：否则 Codex 启动时会要求人工审核这些钩子，点「信任」会把钩子写进用户的全局配置。
+- Claude Code、Codex 的钩子由 `/usr/bin/python3` 运行；它不可用时以 `hook_python_unavailable` 拒绝。pi、omp 的钩子是它们自己加载的扩展，不需要它。
 - 其他失败标识：`bad_cwd`、`exec_failed`（命令不存在等）、`pen_failed`。
 
 ### `corral send`
@@ -132,7 +132,7 @@
 - 选项：`--timeout`
 - 输出字段：`ok` `name` `instance` `exit_code` `stopped_by`
 - 先用这种 agent 自己的退出方式，不行再依次升级到信号，最后总是 SIGKILL；**等到 agent 真正退出、名字可以立刻重新 start 才返回**。`stopped_by` 是最后执行到的一步：`keys`、`SIGHUP`、`SIGTERM`、`SIGKILL`。`exit_code` 为负数表示被信号结束。
-- 各种 agent 的顺序：Claude Code：SIGHUP → SIGTERM；Codex：连按两次 Ctrl-C，等它收尾（最多 60 秒；收尾时间随会话内容增长，实测跑过几轮后要近 30 秒，期间没有输出）→ SIGTERM（Codex 不理 SIGHUP）；pi：SIGHUP → SIGTERM；不认识的：SIGHUP → SIGTERM。
+- 各种 agent 的顺序：Claude Code：SIGHUP → SIGTERM；Codex：连按两次 Ctrl-C，等它收尾（最多 60 秒；收尾时间随会话内容增长，实测跑过几轮后要近 30 秒，期间没有输出）→ SIGTERM（Codex 不理 SIGHUP）；pi：SIGHUP → SIGTERM；omp：SIGHUP → SIGTERM；不认识的：SIGHUP → SIGTERM。
 - `--timeout` 默认 90 秒（盖住最长的退出序列），超时退出码 4（栏位仍会继续升级到 SIGKILL）。
 - agent 自己脱离出去的后台进程（不在它的进程组里）不清。
 

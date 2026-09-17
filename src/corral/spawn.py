@@ -12,9 +12,10 @@ from corral import __version__, agents, env, events, paths, pen
 from corral.errors import EXIT_ERROR, EXIT_EXISTS, CorralError
 
 READY_TIMEOUT = 15.0
-STALE_FILES = ("sock", "meta.json", "exit.json", "cursor", "pen.log", "hook.py", "hook_pi.ts")
+STALE_FILES = ("sock", "meta.json", "exit.json", "cursor", "pen.log", "hook.py", "hook_pi.ts",
+               "hook_omp.ts")
 HOOK_PYTHON = agents.HOOK_PYTHON
-HOOK_DIR = os.path.dirname(os.path.abspath(__file__))  # 各适配器的钩子文件（hook.py、hook_pi.ts）都在这里
+HOOK_DIR = os.path.dirname(os.path.abspath(__file__))  # 各适配器的钩子文件（hook.py、hook_pi.ts、hook_omp.ts）都在这里
 
 
 def open_private(path, flags):

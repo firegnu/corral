@@ -10,7 +10,7 @@ SOCK_PATH_MAX = 104 if os.uname().sysname == "Darwin" else 108
 SEGMENT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 
 # 栏位目录里的内部文件；名字的段不能和它们重名
-INTERNAL_FILES = frozenset({"lock", "meta.json", "sock", "hook.py", "hook_pi.ts", "events", "cursor", "exit.json",
+INTERNAL_FILES = frozenset({"lock", "meta.json", "sock", "hook.py", "hook_pi.ts", "hook_omp.ts", "events", "cursor", "exit.json",
                             "pen.log"})
 
 

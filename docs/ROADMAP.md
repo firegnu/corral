@@ -12,6 +12,7 @@
 | R4 | 适配 pi | 已完成（2026-09-17），真实 pi 实测通过 | Claude Code、Codex 两家在 side project 里测稳 |
 | R5 | 适配 amp | 已调查，暂时接不了 | amp 支持按启动参数加载插件，或人决定接受全局插件的例外 |
 | R6 | 上游 agent 升级后的真实冒烟 | 未开始 | 无，可以随时做 |
+| R7 | 适配 omp | 已完成（2026-09-17），真实 omp 实测通过 | 无 |
 
 ---
 
@@ -246,6 +247,12 @@ corral 的状态、送达确认、回复全靠各家 agent 的钩子事件。Cla
 ### 止损点
 
 - 模型回答不稳定导致检查时过时不过：只核对事件和状态，不核对回答内容；还不稳就减少检查项，不为了冒烟改内核。
+
+## R7 适配 omp
+
+**完成情况（2026-09-17，omp 18.2.2）**：和 pi 一样用 `--extension` 加载钩子扩展 `hook_omp.ts`，单独一份。omp 没有 `agent_settled`，回合结束由扩展从 `agent_end` 判断：`willContinue` 为真不算、可重试的出错多等 2.5 s、其余去抖 250 ms，期间收到新一轮就取消；审批用 `tool_approval_requested/resolved`，提问工具 `ask` 也算等人；只写有界面的主会话。`events.py`、`hook.py`、事件格式、栏位、协议都没改。真实 omp 验收：首句、送话确认、工具、Esc（0.4 s）、SIGHUP 停止（0.1 s）、当委派方用 `send --after` 被提醒。未实测：真实审批框、自动重试。
+
+**遗留问题**：omp 默认读不到全局装的 corral skill（只读项目里的 `.agents/skills/`），要么用 `install-skills --project` 装到项目里，要么人在 omp 配置里打开用户级 skill。
 
 ## 不做
 
