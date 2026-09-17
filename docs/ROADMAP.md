@@ -9,6 +9,8 @@
 | R1 | 看板：终端里看所有 agent 在干什么 | 第一版已落地（2026-09-17），观察中 | 在 side project 里用过一段时间，确认最想念的是「一眼看到状态」 |
 | R2 | 通知守护：agent 卡住或做完时发系统通知 | 未开始 | R1 之后，或独立于 R1，看实际缺哪个 |
 | R3 | 管理面板：在一个终端程序里既看状态又能操作 agent | 未开始，只登记 | R1 在 side project 里用过一段时间，记下最常做的操作 |
+| R4 | 适配 pi | 已调查，未开始 | Claude Code、Codex 两家在 side project 里测稳 |
+| R5 | 适配 amp | 已调查，暂时接不了 | amp 支持按启动参数加载插件，或人决定接受全局插件的例外 |
 
 ---
 
@@ -134,6 +136,77 @@ corral 只做了托管 agent 的后台那一小块：栏位、命令、钩子、
 
 - 发现离不开「在面板里直接看 agent 画面」：停下，这条路需要终端模拟，回到「board 加 attach 分开用」。
 - 为了面板不得不给内核加第二个以上的新能力：停下，重新评估边界。
+
+## R4 适配 pi
+
+### 调查结论（2026-09-17，pi 0.85.1）
+
+可以接，条件基本齐全。只看了帮助信息和随包文档，没有实际跑过。
+
+| corral 需要 | pi 怎么提供 |
+|---|---|
+| 只给这一个进程挂钩子，不改全局配置 | `--extension <文件>` 按启动参数加载扩展，和用户自己的扩展共存 |
+| 会话开始 | `session_start`：会话编号、会话文件、工作目录 |
+| 收到输入并带原文 | `before_agent_start`：用户输入原文 |
+| 正在用哪个工具 | `tool_execution_start` / `tool_execution_end`，只通知，不影响执行 |
+| 这一轮彻底结束，带回复原文 | `agent_settled`（不会再自动继续）；回复原文取自 `agent_end` 带的消息 |
+| 卡住等人 | `ui_prompt_start` / `ui_prompt_end` |
+| 退出 | `session_shutdown`；Ctrl-C、SIGHUP、SIGTERM 都触发，`stop` 发 SIGHUP 即可 |
+| 第一句话从启动参数带进去 | `pi "<第一句>"`，交互模式 |
+
+没有自带权限框和子 agent。
+
+### 要动的地方
+
+- 新增：`agents/pi.py` 适配器；一个 TypeScript 钩子扩展，把 pi 事件翻译成现有事件名写进事件文件；对应测试和假 pi agent。
+- 修改：`agents/__init__.py` 注册；`spawn.py` 从「固定复制 hook.py」改成「按适配器复制各自的钩子文件」；内部文件清单加新文件名；`pyproject.toml` 包数据。
+- 文档：CONTRACT 的 agent 种类、`--prompt` 支持范围、保留名字；DESIGN 第 12 节；skill 和使用说明。
+- 不动：栏位、协议、`hook.py`、事件格式版本。
+- **`events.py` 尽量不改**：它是所有命令判定状态共用的，改了立即影响正在跑的 Claude Code 和 Codex。映射：`session_start` → SessionStart，`before_agent_start` → UserPromptSubmit，工具事件 → PreToolUse / PostToolUse，`ui_prompt_start` → 权限框类的 Notification，`agent_settled` → Stop，`session_shutdown` → SessionEnd。`ui_prompt_end` 没有现成的「解除卡住」事件可映射，实测后如果确实要改 `events.py`，单独按 DESIGN 第 16 节评估。
+
+### 动手前要人拍板
+
+1. 仓库里第一次出现非 Python 文件。不增加依赖，但要和「只用 Python 标准库」对口径。
+2. 扩展直接写事件文件（顺序可靠，格式在 TypeScript 里再写一份，用测试保证一致），还是每个事件调用 `hook.py`（格式一份，异步调用时顺序可能乱）。倾向前者。
+3. 扩展本身的测试：假 agent 跑不了 TypeScript，只能测 corral 这边的判定；扩展本身靠真实 pi 验证，或在有 node 的机器上额外测。
+
+### 要实测
+
+- 按 Esc 打断后 `agent_settled` 是否照常触发。不触发就和 Claude Code 一样，只能靠 `wait --quiet` 兜底。
+- 目录里有 `.pi` 或 `.agents/skills` 时的项目信任提示。
+- 真实 pi 跑一遍委派、送话确认、`send --after`；委派方仍用 sonnet。
+
+### 止损点
+
+- 映射不干净，必须给 `events.py` 加 pi 专用的判定才能用：停下评估，不为一家 agent 让共用的状态判定变复杂。
+
+## R5 适配 amp
+
+### 调查结论（2026-09-17，amp 2026-09-17 构建）
+
+**事件够用，但现在接不了，卡在插件的加载方式。**
+
+| corral 需要 | amp 插件提供 |
+|---|---|
+| 会话开始 | `session.start` |
+| 收到输入并带原文 | `agent.start` |
+| 工具 | `tool.call` / `tool.result` |
+| 这一轮结束并带回复 | `agent.end`：done / error / cancelled，加本轮消息 |
+| 卡住等批准 | 当前会话状态流里的 `awaiting-approval` |
+| 子会话 | 插件收到本进程所有会话的事件，要按父会话过滤 |
+
+**卡住的原因**：插件只能从个人设置、工作区设置、项目 `.amp/plugins/`、全局 `~/.config/amp/plugins/` 加载。官方文档确认没有命令行参数或环境变量能按一次启动加载任意路径的插件。放项目目录等于往用户仓库里写文件，放全局目录等于改全局配置，都违反 corral 的规矩。改 `XDG_CONFIG_HOME` 能绕过去，但 agent 里跑的所有命令都会继承它，副作用太大，不采用。
+
+**另外的问题**
+
+- 第一句话没法从启动参数带进去：交互模式只支持管道输入，而 corral 里 agent 的输入是终端。
+- `tool.call` 的处理函数必须返回一个决定，挂上它可能绕过 amp 自己的权限规则；要确认有没有只观察、不表态的写法。
+- 会话默认存在 Amp 服务器上，涉及隐私的项目要注意。
+
+### 什么时候再看
+
+- amp 提供按启动参数加载插件；或者
+- 人决定接受一个例外：像 `install-skills` 一样经人确认后装一个全局插件，只在检测到 corral 的环境变量时生效。这要先改 DESIGN 第 14 节「不动全局配置」。
 
 ## 不做
 
