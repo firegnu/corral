@@ -41,7 +41,7 @@ corral start demo/ask --unique --cwd ~/proj --prompt "看一下这个想法：�
 - `--` 后面是 agent 的完整命令，模型等参数照常跟在后面，如 `-- claude --model haiku`。
 - Codex 一律 `--yolo`：它默认开沙箱，沙箱里连不上 corral，也写不了仓库外的文件。
 - pi：没有自带权限框，只有扩展弹出的确认框会显示成 blocked。Ctrl-C 第一次只清空输入框，连按两次才退出；Esc 打断。它读 `~/.agents/skills/`，和 Codex 共用已经装好的 corral skill。
-- omp：用法和 pi 差不多。要让它自己运行 corral 命令去委派，启动时加 `--approval-mode yolo`。不要用家目录当 `--cwd`，omp 会自动换到临时目录，状态会停在 starting。它默认读不到全局装的 corral skill，要用 `corral install-skills --project <项目目录>` 装到项目里。
+- omp：用法和 pi 差不多。要让它自己运行 corral 命令去委派，启动时加 `--approval-mode yolo`。不要用家目录当 `--cwd`，omp 会自动换到临时目录，状态会停在 starting。它也读 `~/.agents/skills/`，和 Codex、pi 共用已经装好的 corral skill。
 - `--prompt` 是第一句话，由 agent 自己提交。**新开的 agent 送第一句只能走这里**，Codex 在第一次提交前没有任何事件，`send` 会被拒。
 - `--unique` 把名字当前缀，自动补后缀（`demo/ask-3`），以输出里的 `name` 为准。要同时开好几个就用它。
 - `--env KEY=VALUE` 给 agent 补环境变量。agent 的环境取自你的登录 shell，不是当前终端的。

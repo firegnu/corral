@@ -335,7 +335,7 @@ agent A
 - 在家目录启动时 omp 会自动换到临时目录，工作目录和栏位对不上，状态会停在 starting；不要用家目录当 `--cwd`，或者自己加 `--allow-home`。
 - omp 可能对工具调用要审批；当委派方时自己要能运行 corral 命令，启动时加 `--approval-mode yolo`（和 Codex 用 `--yolo` 同理）。
 - 实测通过（带 `--approval-mode yolo`）：`--prompt` 首句 4 s 答完；多行送话确认送达；调用工具时 working 并报出工具名；Esc 打断后 0.4 s 回到 idle（含去抖）；SIGHUP 0.1 s 退出；当委派方时用 `send --after` 交出任务、中途被插话、做完被提醒并取回结果。
-- **读 skill 的位置不同**：omp 默认只读项目里的 `.agents/skills/`，用户级的 `~/.agents/skills/` 要在 omp 自己的配置里显式打开。所以全局装的 corral skill，omp 默认读不到；用 `corral install-skills --project <目录>` 装到项目里，omp 在那个目录工作时就能读到。
+- 读 skill 的位置包含 `~/.agents/skills/`，实测能读到全局装的 corral skill，和 Codex、pi 共用那一份。
 - 用户全局扩展出错同样会让 omp 启动即崩（实测：调用已删除程序的扩展），和 corral 无关。
 - 未实测：审批框和提问工具显示成 blocked（只用假 agent 和扩展单元测试测过）；可重试出错后的自动重试。
 
