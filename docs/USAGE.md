@@ -84,6 +84,18 @@ corral read demo/alice     # 最近的原始输出，只作排查
 
 `idle` 只表示这一轮结束，agent 可能自己再开一轮（后台命令结束后注入通知就是这样）。看 `last_input_source` 是 `send`、`human` 还是 `agent`。
 
+### 一眼看所有 agent：看板
+
+```sh
+<仓库>/tools/board                 # 每 3 秒刷新，Ctrl-C 退出
+<仓库>/tools/board --prefix demo/  # 只看某个前缀
+<仓库>/tools/board --once          # 只打印一次
+```
+
+- 每个 agent 一行：名字、种类、实例编号、状态、正在做（在干活或卡住时显示最近的工具和这一轮跑了多久）、多久没输出、接入窗口数、最近一次输入的来源、终端标题。
+- 只读：它只调用 `corral ls` 和 `corral status`，不操作任何 agent。适合在一个分屏里一直开着。
+- 它是配套工具，不是 `corral` 的子命令，不在 PATH 上。常用的话，在你自己的 shell 配置里给它起个别名。
+
 ### 说话
 
 ```sh

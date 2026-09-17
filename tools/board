@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""corral 看板：在终端里实时列出所有 agent 的状态和正在做什么。
+
+配套工具，不属于 corral 内核：只调用本仓库的 `corral ls` 和 `corral status`，只读，不操作任何 agent，
+不读状态目录里的文件。按 Ctrl-C 退出。
+
+用法：tools/board [--every 秒] [--once] [--prefix 名字前缀]
+"""
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
+import unicodedata
+
+CORRAL = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin", "corral")
+COLUMNS = ("名字", "种类", "实例", "状态", "正在做", "无输出", "接入", "最近输入", "标题")
+
+
+def corral(*args):
+    try:
+        proc = subprocess.run([sys.executable, CORRAL, *args], capture_output=True, text=True, timeout=15)
+        return proc.returncode, json.loads(proc.stdout)
+    except (subprocess.TimeoutExpired, ValueError):
+        return -1, {}
+
+
+def width(s):
+    return sum(2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1 for ch in s)
+
+
+def cut(s, n):
+    out = ""
+    for ch in s:
+        if width(out + ch) > n:
+            return out[:-1] + "…"
+        out += ch
+    return out
+
+
+def pad(s, n):
+    return s + " " * max(0, n - width(s))
+
+
+def secs(x):
+    return "" if x is None else (f"{int(x)}s" if x < 3600 else f"{x / 3600:.1f}h")
+
+
+def rows(prefix):
+    code, listing = corral("ls")
+    if code != 0:
+        return [("(corral ls 失败)", "", "", listing.get("error", ""), "", "", "", "", "")]
+    now = time.time()
+    out = []
+    for item in sorted(listing.get("agents", []), key=lambda i: i["name"]):
+        name = item["name"]
+        if prefix and not name.startswith(prefix):
+            continue
+        if item.get("starting"):
+            out.append((name, "", "", "(启动中)", "", "", "", "", ""))
+            continue
+        if item.get("incompatible"):
+            out.append((name, "", "", f"(不兼容 proto {item.get('proto')})", "", "", "", "", ""))
+            continue
+        code, st = corral("status", name)
+        if code != 0:
+            out.append((name, item.get("kind") or "", "", f"(退出码 {code})", "", "", "", "", ""))
+            continue
+        doing = ""
+        if st.get("state") in ("working", "blocked"):
+            elapsed = secs(now - st["turn_started"]) if st.get("turn_started") else ""
+            doing = f"{st.get('last_tool') or '思考/输出'} {elapsed}".strip()
+        out.append((name, st.get("kind") or "", (st.get("instance") or "")[:6], st.get("state") or "", doing,
+                    secs(st.get("idle_for")), str(st.get("attached", "")), st.get("last_input_source") or "",
+                    cut(st.get("title") or "", 28)))
+    return out
+
+
+def render(prefix):
+    table = [COLUMNS] + rows(prefix)
+    widths = [max(width(r[i]) for r in table) for i in range(len(COLUMNS))]
+    lines = [f"corral 看板  {time.strftime('%H:%M:%S')}"]
+    for r in table:
+        lines.append("  ".join(pad(c, w) for c, w in zip(r, widths)).rstrip())
+    if len(table) == 1:
+        lines.append("（没有 agent）")
+    return "\n".join(lines)
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="board", description="实时列出所有 corral agent 的状态")
+    ap.add_argument("--every", type=float, default=3.0, help="刷新间隔秒数，默认 3")
+    ap.add_argument("--once", action="store_true", help="只打印一次")
+    ap.add_argument("--prefix", help="只看名字以它开头的 agent，如 demo/")
+    args = ap.parse_args()
+    if args.once:
+        print(render(args.prefix))
+        return
+    try:
+        while True:
+            text = render(args.prefix)
+            sys.stdout.write("\x1b[H\x1b[2J" + text + "\n")
+            sys.stdout.flush()
+            time.sleep(args.every)
+    except KeyboardInterrupt:
+        pass
+
+
+if __name__ == "__main__":
+    main()
