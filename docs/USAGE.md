@@ -27,7 +27,7 @@ corral install-skills                          # 把 skill 装进 Claude Code �
 
 ### 开
 
-**要让 corral 管的 agent，必须用 `corral start` 开。** 直接在终端里敲 `claude` 或 `codex --yolo` 开的 agent，corral 完全看不见：没有栏位托着它，钩子也没注入，`ls`、`send`、`attach` 都找不到它。包括你日常聊天的主对话在内，所有 agent 都这样开，见第 4 节。
+**要让 corral 管的 agent，必须用 `corral start` 开。** 直接在终端里敲 `claude` 或 `codex --yolo` 开的 agent，corral 完全看不见：没有栏位托着它，钩子也没注入，`ls`、`send`、`attach` 都找不到它。包括你日常聊天的主控 agent 在内，所有 agent 都这样开，见第 4 节。
 
 ```sh
 corral start demo/alice --cwd ~/proj -- claude
@@ -133,9 +133,64 @@ corral stop demo/alice   # 等 agent 真正退出才返回；输出 exit_code �
 
 Claude Code 约 1 秒。Codex 用它自己的方式（连按两次 Ctrl-C）退出，收尾时间随会话内容增长，跑过几轮后要近 30 秒，corral 最多等 60 秒再升级到信号。`stopped_by` 是 `keys` 说明正常退出；是 `SIGTERM` 说明没等到。
 
-agent 不会自己退出，用完记得 stop；`corral ls` 看还开着哪些。主对话替你开的 agent 默认不关，你说关才关，见第 4 节。
+agent 不会自己退出，用完记得 stop；`corral ls` 看还开着哪些。主控替你开的 agent 默认不关，你说关才关，见第 5 节。
 
-## 4. 多 agent：在对话里开另一个 agent
+## 4. 主控 agent：每天怎么开、怎么用、怎么关
+
+主控 agent 就是你每天在里面聊天、让它去派活的那个。给它一个固定名字，比如 `demo/main`，每天都用这个名字。
+
+### 开，然后接进去
+
+```sh
+corral start demo/main --cwd ~/proj -- claude
+corral attach demo/main
+```
+
+换别的 agent 当主控，只改 `--` 后面：
+
+| 主控用 | `--` 后面写 | 注意 |
+|---|---|---|
+| Claude Code | `claude` | 不要用 haiku，它运行 corral 命令会弹权限框 |
+| Codex | `codex --yolo` | 必须带 `--yolo`，否则在沙箱里用不了 corral |
+| pi | `pi` | |
+| omp | `omp --approval-mode yolo` | 工作目录不要用家目录 |
+
+提示同名已在跑（退出码 5），说明它还开着，直接 `corral attach demo/main` 接回去就行。
+
+### 用的过程中
+
+- 暂时离开：按 Ctrl-] 或者直接关窗口，主控继续跑。换任何终端都能再 `corral attach demo/main` 接回来。
+- **不要在里面输入 `/exit`**，那会真的把它关掉，见第 3 节「断开和退出不是一回事」。
+- 想看它派出去的 agent 在干什么，另开一个窗口跑看板，见第 3 节「一眼看所有 agent」。
+- 派活、追问、长任务做完提醒，都在对话里说，见第 5 节。
+
+### 下班
+
+先在主控里说：「把今天的进展、定下的结论和没解决的问题写进交接记录。」然后关掉：
+
+```sh
+corral stop demo/main
+corral ls
+```
+
+`corral ls` 里还开着的、主控派出去的 agent，确认不用了也一起 stop。
+
+### 第二天
+
+同样两条命令开、接进去，第一句说：「先读 AGENTS.md 和交接记录，再接着做。」
+
+记忆靠项目里的文件，不靠恢复昨天的对话：交接记录、项目说明、提交记录都在，新开的主控读一遍就能接上。被派出去的 agent 不需要记忆，用的时候重新派，交代里让它先读相关文件。
+
+### 想少敲字（可选）
+
+在你自己的 shell 配置里加一个函数，把开和接合成一条，已经开着就直接接上：
+
+```sh
+cmain() { corral start "$1" --cwd "$PWD" -- "${@:2}" >/dev/null; corral attach "$1"; }
+# 用法：cd ~/proj && cmain demo/main claude
+```
+
+## 5. 多 agent：在对话里开另一个 agent
 
 corral 的日常用法不是写脚本，而是**对你手头的 agent 说一句话，它自己去开另一个 agent 干活**。前提是 skill 已装（第 2 节）。
 
@@ -156,18 +211,9 @@ corral 的日常用法不是写脚本，而是**对你手头的 agent 说一句�
 2. `wait` 等对方答完，`reply` 取回复原文，整理后告诉你。
 3. **默认不关**。把结果告诉你时，会说明对方还开着、叫什么名字。你想让它接着做就直接说，不用了说「关掉」。
 
-### 主对话也用 corral 开
+### 主控也用 corral 开
 
-你日常聊天、让它去开别的 agent 的那个主对话，同样用 corral 开：
-
-```sh
-corral start demo/main --cwd ~/proj -- claude
-corral attach demo/main
-```
-
-- 离开按 Ctrl-]，要结束时 `corral stop demo/main`。别在里面输入 `/exit`，见第 3 节「断开和退出不是一回事」。
-- 好处：关窗口不丢、换终端接着聊，而且它有名字，别的 agent 做完能提醒它（下一小节）。
-- 直接敲 `claude` 开的主对话，skill 会让它拒绝委派，提醒你先用 corral 启动。
+怎么开、怎么用、怎么关见第 4 节。直接敲 `claude` 开的主控，skill 会让它拒绝委派，提醒你先用 corral 启动。
 
 它开出来的 agent 是独立的会话，有自己的上下文，看不到你和它的对话。所以要交代清楚的内容，让它在提示里写全，或者先写进文件再让对方「读某某文件」。长材料一律走文件。
 
@@ -216,7 +262,7 @@ corral attach demo/main
 
 评审循环、请求和交付的交接、自动叫醒之类的固定流程，属于建在 corral 之上的 harness，不属于 corral，也不在这份文档里展开。corral 只提供命令，流程由 harness 决定。
 
-## 5. 几个日常场景
+## 6. 几个日常场景
 
 corral 本身没有场景，场景来自你手上的活。下面这些不需要任何流程，说一句话就行。
 
@@ -248,7 +294,7 @@ corral 本身没有场景，场景来自你手上的活。下面这些不需要�
 
 先用前两条，用一段时间自然会冒出自己的用法。
 
-## 6. 规矩
+## 7. 规矩
 
 - **所有 agent 都用 corral 开**，主对话也不例外。
 - **一个 agent 只走一条通道**。用 corral 开的 agent，送话、等待、停止都只用 corral。它仍然是普通会话，别的渠道（会话之间的消息、子 agent 工具）也能碰到它，但 corral 看不见那些输入，混用后状态和输入来源都会失真。
@@ -270,7 +316,7 @@ corral 本身没有场景，场景来自你手上的活。下面这些不需要�
 | 8 | 人刚操作过 | 过 30 秒再试；确定要打断人才 `--force` |
 | 9 | 版本不兼容 | 用对应版本的 corral stop 后重新 start |
 
-## 7. 出岔子
+## 8. 出岔子
 
 - **一直 `starting`**：卡在信任框或别的启动对话框里，接进去处理；Codex 在第一句提交前也是 starting，所以第一句必须用 `--prompt`。
 - **wait 返回 `blocked`**：权限框或提问框，接进去点；处理完状态会回到 `working`，再 wait。
@@ -284,7 +330,7 @@ corral 本身没有场景，场景来自你手上的活。下面这些不需要�
 - **退 9**：新旧版本的 corral 混着用了。用启动它的那个版本 stop，再用新版 start。
 - **整个终端软件退了**：agent 照常在跑，`corral ls` 找回来再 attach。
 
-## 8. 边界
+## 9. 边界
 
 - 状态目录默认 `~/.corral`，环境变量 `CORRAL_HOME` 可改；同一台机器、同一用户看到的是同一个目录。agent 环境里带着 `CORRAL_HOME`、`CORRAL_NAME`、`CORRAL_INSTANCE`，agent 里再调 corral 看到的也是同一份。
 - 钩子只随 corral 启动的那个 agent 生效，不写任何全局配置。你自己的全局钩子和插件照常对它生效。
