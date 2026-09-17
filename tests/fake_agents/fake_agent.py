@@ -1,6 +1,8 @@
 """假 agent：按 Claude Code / Codex 的方式读启动参数里的钩子并执行，在伪终端里收输入、按剧本产生事件。
 
-种类由程序名决定（support.fake_agent 生成名为 claude / codex 的包装脚本）。
+种类由程序名决定（support.fake_agent 生成名为 claude / codex / pi 的包装脚本）。
+pi 不跑命令钩子：真 pi 加载 --extension 指定的 TypeScript 扩展，由扩展直接写事件文件。假 pi 按 hook_pi.ts 的映射
+直接写同样格式的事件（扩展本身的映射由 tests/test_pi_hook.py 用 bun / node 单独测）。
 
 提交的文字决定这一轮做什么：
   reply:<文字>     转圈 0.3 秒后回合结束，回复 <文字>
@@ -35,6 +37,7 @@ import uuid
 
 FLAVOR = globals().get("FAKE_FLAVOR") or os.path.basename(sys.argv[0])
 CODEX = FLAVOR == "codex"
+PI = FLAVOR == "pi"
 SPIN = "|/-\\"
 
 
@@ -47,6 +50,7 @@ def log(obj):
 
 def parse_args(args):
     hooks, bypass, positional = {}, False, []
+    extension = None
     i = 0
     while i < len(args):
         a = args[i]
@@ -63,6 +67,9 @@ def parse_args(args):
                     hooks.setdefault(ev, []).extend(h["command"] for e in entries for h in e["hooks"])
         elif a == "--dangerously-bypass-hook-trust":
             bypass = True
+        elif a == "--extension":
+            extension = args[i]
+            i += 1
         elif a in ("-m", "--model"):
             i += 1
         elif a == "--allowedTools":
@@ -74,14 +81,16 @@ def parse_args(args):
             break
         elif not a.startswith("-"):
             positional.append(a)
-    return hooks, bypass, (positional[-1] if positional else None)
+    return hooks, bypass, (positional[-1] if positional else None), extension
 
 
 class Agent:
     def __init__(self):
-        self.hooks, bypass, self.first_prompt = parse_args(sys.argv[1:])
+        self.hooks, bypass, self.first_prompt, self.extension = parse_args(sys.argv[1:])
         log({"argv": sys.argv})
         self.hooks_enabled = not (CODEX and self.hooks and not bypass)
+        if PI:  # 扩展副本必须真的在栏位目录里，才算挂上了
+            self.hooks_enabled = bool(self.extension and os.path.isfile(self.extension))
         self.sid = uuid.uuid4().hex
         self.session_started = False
         self.buffer = b""
@@ -98,6 +107,9 @@ class Agent:
 
     def fire(self, event, sid=None, **fields):
         if not self.hooks_enabled:
+            return
+        if PI:
+            self.fire_pi(event, **fields)
             return
         payload = {"session_id": sid or self.sid, "cwd": os.getcwd(), "hook_event_name": event,
                    "transcript_path": f"/tmp/fake-{sid or self.sid}.jsonl", **fields}
@@ -227,6 +239,19 @@ class Agent:
                 self.buffer += ch
                 self.out(ch)
 
+    def fire_pi(self, event, **fields):
+        """按 hook_pi.ts 的映射写事件：权限请求在 pi 里是扩展弹框（通知），打断后 agent_settled 记为回合结束。"""
+        if event == "PermissionRequest":
+            event, fields = "Notification", {"notification_type": "permission_prompt"}
+        path = os.environ.get("CORRAL_EVENTS")
+        if not path:
+            return
+        rec = {"v": 1, "t": time.time(), "ev": event, "inst": os.environ.get("CORRAL_INSTANCE", ""),
+               "has_transcript": True, "session_id": self.sid, "cwd": os.getcwd()}
+        rec.update({k: v for k, v in fields.items() if isinstance(v, (str, int, float, bool))})
+        with open(path, "a") as f:
+            f.write(json.dumps(rec) + "\n")
+
     def interrupt(self):
         if not self.working:
             return
@@ -234,6 +259,9 @@ class Agent:
         if CODEX:
             self.working = False
             self.fire("Interrupt")
+        if PI:  # 按 hook_pi.ts：打断后 agent_settled 照常触发，记为回合结束（真 pi 待实测）
+            self.working = False
+            self.fire("Stop")
         # Claude Code 被打断时没有任何事件，状态停在 working；working 标志留着，界面不再输出
 
     def ctrl_c(self):
@@ -254,6 +282,8 @@ class Agent:
     def main(self):
         if CODEX:
             signal.signal(signal.SIGHUP, signal.SIG_IGN)  # 真 Codex 不理 SIGHUP
+        if PI:  # 真 pi 收到 SIGHUP 触发 session_shutdown 后退出
+            signal.signal(signal.SIGHUP, lambda *_: (self.fire("SessionEnd"), sys.exit(0)))
         attrs = termios.tcgetattr(0)
         tty.setraw(0)
         try:

@@ -16,6 +16,7 @@ class LookupTest(unittest.TestCase):
         self.assertEqual(agents.for_command(["claude"]).kind, "claude")
         self.assertEqual(agents.for_command(["/opt/bin/claude", "--model", "haiku"]).kind, "claude")
         self.assertEqual(agents.for_command(["codex"]).kind, "codex")
+        self.assertEqual(agents.for_command(["/Users/x/.bun/bin/pi"]).kind, "pi")
         self.assertIsNone(agents.for_command(["sh", "-c", "x"]))
 
 
@@ -76,6 +77,30 @@ class CodexTest(unittest.TestCase):
     def test_prompt_is_last_argument(self):
         out = self.build(["codex", "--yolo"], prompt="hello")
         self.assertEqual(out[-3:], ["--yolo", "--", "hello"])
+
+
+class PiTest(unittest.TestCase):
+    HOOK = "/tmp/h/demo/p/hook_pi.ts"
+
+    def build(self, argv, prompt=None):
+        return agents.for_command(argv).build(argv, self.HOOK, prompt)
+
+    def test_extension_flag_loads_private_copy(self):
+        out = self.build(["pi", "--model", "sonnet"])
+        self.assertEqual(out, ["pi", "--extension", self.HOOK, "--model", "sonnet"])
+
+    def test_prompt_is_last_argument(self):
+        out = self.build(["pi", "--model", "sonnet"], prompt="-first\nsecond")
+        self.assertEqual(out[-2:], ["--", "-first\nsecond"])
+
+    def test_hook_file_and_quit(self):
+        pi = agents.ADAPTERS["pi"]
+        self.assertEqual(pi.hook_file, "hook_pi.ts")
+        self.assertFalse(pi.needs_hook_python)
+        self.assertEqual([st.get("signal") for st in agents.quit_steps("pi")], ["HUP", "TERM"])
+        for kind in ("claude", "codex"):
+            self.assertEqual((agents.ADAPTERS[kind].hook_file, agents.ADAPTERS[kind].needs_hook_python),
+                             ("hook.py", True))
 
 
 if __name__ == "__main__":

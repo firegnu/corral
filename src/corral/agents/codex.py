@@ -24,6 +24,8 @@ CTRL_C = base64.b64encode(b"\x03").decode()
 
 class Codex:
     kind = "codex"
+    hook_file = "hook.py"
+    needs_hook_python = True
     # 实测不理 SIGHUP。连按两次 Ctrl-C 会显示「Shutting down...」并正常退出（退出码 0），但收尾很久且随会话
     # 内容增长（M8 刚起的会话 7.6 秒；corral-lab 实测跑过三轮后 27.7 秒，两次 Ctrl-C 的间隔不是原因），收尾期间
     # 没有任何输出可供判断，只能等：取栏位允许的最长一步 60 秒（观测值的两倍）再终止，免得打断它收尾

@@ -12,9 +12,9 @@ from corral import __version__, agents, env, events, paths, pen
 from corral.errors import EXIT_ERROR, EXIT_EXISTS, CorralError
 
 READY_TIMEOUT = 15.0
-STALE_FILES = ("sock", "meta.json", "exit.json", "cursor", "pen.log", "hook.py")
+STALE_FILES = ("sock", "meta.json", "exit.json", "cursor", "pen.log", "hook.py", "hook_pi.ts")
 HOOK_PYTHON = agents.HOOK_PYTHON
-HOOK_SOURCE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hook.py")
+HOOK_DIR = os.path.dirname(os.path.abspath(__file__))  # 各适配器的钩子文件（hook.py、hook_pi.ts）都在这里
 
 
 def open_private(path, flags):
@@ -90,13 +90,13 @@ def check_hook_python():
 
 
 def prepare_files(d, adapter):
-    """事件文件清空重建；认识的 agent 复制一份钩子脚本。都是 0600。"""
+    """事件文件清空重建；认识的 agent 复制一份它自己的钩子文件。都是 0600。"""
     fd = open_private(os.path.join(d, "events"), os.O_WRONLY | os.O_TRUNC)
     os.close(fd)
     if adapter is None:
         return None
-    hook_path = os.path.join(d, "hook.py")
-    with open(HOOK_SOURCE, "rb") as src:
+    hook_path = os.path.join(d, adapter.hook_file)
+    with open(os.path.join(HOOK_DIR, adapter.hook_file), "rb") as src:
         body = src.read()
     fd = open_private(hook_path, os.O_WRONLY | os.O_TRUNC)
     try:
@@ -125,7 +125,7 @@ def start(name, cwd, argv, unique=False, env_pairs=(), prompt=None):
     adapter = agents.for_command(argv)
     if prompt is not None and adapter is None:
         raise CorralError(EXIT_ERROR, "usage", f"--prompt is only supported for {sorted(agents.ADAPTERS)}")
-    if adapter is not None:
+    if adapter is not None and adapter.needs_hook_python:
         check_hook_python()
     name, lock_fd = acquire(name, unique)
     d = paths.pen_dir(name)

@@ -16,7 +16,7 @@ corral reply <名字>
 
 - `start` 输出里的 `name` 就是之后要用的名字（`--unique` 会补后缀，如 `demo/ask-3`）。
 - 第一句话**必须**用 `--prompt` 带上；新开的 agent 不能用 `send` 送第一句。
-- 换成 Codex：`-- codex --yolo`（在 Codex 沙箱里 corral 会直接拒绝，见下）。
+- 换成 Codex：`-- codex --yolo`（在 Codex 沙箱里 corral 会直接拒绝，见下）。换成 pi：`-- pi`。
 - `reply` 的 `text` 是回复原文，多段文字和代码块原样保留。
 
 追问、用完：

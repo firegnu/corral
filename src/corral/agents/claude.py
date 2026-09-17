@@ -10,6 +10,8 @@ TOOL_EVENTS = ("PreToolUse", "PostToolUse", "PermissionRequest")
 
 class Claude:
     kind = "claude"
+    hook_file = "hook.py"        # 复制进栏位目录的钩子文件名
+    needs_hook_python = True     # 钩子命令由 /usr/bin/python3 运行
     # 实测收到 SIGHUP 约 1 秒正常退出
     quit_steps = ({"signal": "HUP", "wait": 5}, {"signal": "TERM", "wait": 3})
 

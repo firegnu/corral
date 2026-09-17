@@ -32,12 +32,14 @@ corral install-skills                          # 把 skill 装进 Claude Code �
 ```sh
 corral start demo/alice --cwd ~/proj -- claude
 corral start demo/alice --cwd ~/proj -- codex --yolo
+corral start demo/alice --cwd ~/proj -- pi
 corral start demo/ask --unique --cwd ~/proj --prompt "看一下这个想法：……" -- claude
 ```
 
 - `start` 立即返回一行 JSON，agent 在后台的栏位里跑，此时你看不到它的界面。想像平时那样面对面用，就紧接着 `corral attach demo/alice`；或者预先在旁边挂一个 `corral attach --wait demo/alice`，start 一完成就自动接上。
 - `--` 后面是 agent 的完整命令，模型等参数照常跟在后面，如 `-- claude --model haiku`。
 - Codex 一律 `--yolo`：它默认开沙箱，沙箱里连不上 corral，也写不了仓库外的文件。
+- pi：没有自带权限框，只有扩展弹出的确认框会显示成 blocked。Ctrl-C 第一次只清空输入框，连按两次才退出；Esc 打断。它读 `~/.agents/skills/`，和 Codex 共用已经装好的 corral skill。
 - `--prompt` 是第一句话，由 agent 自己提交。**新开的 agent 送第一句只能走这里**，Codex 在第一次提交前没有任何事件，`send` 会被拒。
 - `--unique` 把名字当前缀，自动补后缀（`demo/ask-3`），以输出里的 `name` 为准。要同时开好几个就用它。
 - `--env KEY=VALUE` 给 agent 补环境变量。agent 的环境取自你的登录 shell，不是当前终端的。
@@ -273,6 +275,7 @@ corral 本身没有场景，场景来自你手上的活。下面这些不需要�
 - **`stopped-quiet`**：人打断了它。看窗口决定是重送还是作罢。
 - **主对话一委派就变 blocked**：实测用 haiku 做主对话时，它运行 corral 命令会弹 Claude Code 的权限框，启动时加了允许 corral 命令的参数也一样；换成 sonnet 就没有。做主对话请用 sonnet 或更强的模型，Codex 用 `--yolo`。
 - **交出去之后一直没被提醒**：`corral status <对方名字>` 看对方状态。对方还在干活，说明它没停；对方已经停了，多半是提醒送的时候主对话被重启过，直接让主对话去取回复。
+- **pi 刚 start 就「不存在」**：多半是你的某个 pi 全局扩展出错，让 pi 一启动就退出。直接在终端里敲 `pi` 看报错。
 - **send 退 3**：屏幕上可能是菜单或对话框把文字吞了。corral 不补发按键，因为补发的回车可能点中菜单项。接进去看。
 - **stop 出来 `stopped_by: SIGTERM`**：Codex 没在 60 秒内收尾完，会话里未落盘的东西可能丢了。记下来，这是要放宽阈值的信号。
 - **退 9**：新旧版本的 corral 混着用了。用启动它的那个版本 stop，再用新版 start。
