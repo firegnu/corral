@@ -1,0 +1,237 @@
+#!/usr/bin/env python3
+"""corral 冒烟：用真实 agent 核对各家适配没有被上游升级悄悄弄坏（路线图 R6）。
+
+配套工具，不属于 corral 内核：只调用本仓库的 corral 命令。用单独的短路径状态目录和临时工作目录，
+不碰正在用的 agent，结束时无论成败都停掉自己开的 agent 并清理。会花少量 token，会触发 agent 的全局钩子
+（比如桌面通知）。只核对机制（事件、状态、送达确认），不核对模型回答的内容。
+
+用法：tools/smoke [--agents claude,codex,pi,omp] [--no-delegator]
+"""
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CORRAL = os.path.join(ROOT, "bin", "corral")
+HOME_DIR = os.path.expanduser("~")
+
+# 每家 agent：怎么启动、在哪个目录跑、打断后该看到什么、正常停止的方式
+AGENTS = {
+    "claude": {"cmd": ["claude", "--model", "sonnet"], "version": ["claude", "--version"],
+               "cwd": "temp", "esc": "stopped-quiet", "stop": "SIGHUP"},
+    # Codex 只信任列表里的目录，临时目录会弹信任框；家目录在信任列表里
+    "codex": {"cmd": ["codex", "--yolo", "-m", "gpt-5.6-luna", "-c", 'model_reasoning_effort="low"'],
+              "version": ["codex", "--version"], "cwd": "home", "esc": "idle", "stop": "keys"},
+    "pi": {"cmd": ["pi"], "version": ["pi", "--version"], "cwd": "temp", "esc": "idle", "stop": "SIGHUP"},
+    # omp 在家目录会自动换到临时目录，所以用临时目录
+    "omp": {"cmd": ["omp", "--approval-mode", "yolo"], "version": ["omp", "--version"],
+            "cwd": "temp", "esc": "idle", "stop": "SIGHUP"},
+}
+HELPER = ["claude", "--model", "haiku"]  # 委派测试里被开出来的一方，只写字不跑命令
+
+
+class Smoke:
+    def __init__(self):
+        self.home = tempfile.mkdtemp(prefix="csm-", dir="/tmp")  # 短路径：socket 路径有长度限制
+        self.temp_cwd = tempfile.mkdtemp(prefix="csm-cwd-", dir="/tmp")
+        self.env = dict(os.environ, CORRAL_HOME=self.home)
+        self.started = []
+
+    def corral(self, *args, timeout=240):
+        try:
+            p = subprocess.run([sys.executable, CORRAL, *args], capture_output=True, text=True, env=self.env,
+                               timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return -1, {"error": "command timeout"}
+        try:
+            return p.returncode, json.loads(p.stdout)
+        except ValueError:
+            return p.returncode, {"error": p.stdout.strip()[-200:] or p.stderr.strip()[-200:]}
+
+    def start(self, name, cwd, cmd, prompt):
+        self.started.append(name)
+        return self.corral("start", name, "--cwd", cwd, "--prompt", prompt, "--", *cmd)
+
+    def turn(self, name, limit=240):
+        """等这一轮结束，返回 (结果, 状态)。结果：idle / blocked / stopped-quiet / exited / timeout。"""
+        end = time.time() + limit
+        while time.time() < end:
+            code, out = self.corral("wait", name, "--timeout", "60")
+            if code == 0:
+                return out.get("result"), out
+            if code == 2:
+                return "exited", out
+            if code != 4:
+                return f"error {code} {out.get('error')}", out
+        return "timeout", {}
+
+    def status(self, name):
+        return self.corral("status", name)[1]
+
+    def until(self, pred, limit, interval=0.3):
+        end = time.time() + limit
+        while time.time() < end:
+            value = pred()
+            if value:
+                return value
+            time.sleep(interval)
+        return None
+
+    def cleanup(self):
+        for name in self.started:
+            self.corral("stop", name, timeout=120)
+        _, out = self.corral("ls")
+        leftovers = [a["name"] for a in out.get("agents", [])]
+        shutil.rmtree(self.home, ignore_errors=True)
+        shutil.rmtree(self.temp_cwd, ignore_errors=True)
+        return leftovers
+
+
+def version(cmd):
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30, cwd="/tmp").stdout.strip()
+        return out.splitlines()[0] if out else "?"
+    except (OSError, subprocess.TimeoutExpired):
+        return "not installed"
+
+
+def check_agent(s, kind, conf, delegator):
+    cwd = HOME_DIR if conf["cwd"] == "home" else s.temp_cwd
+    name = f"smoke/{kind}"
+    results = {}
+
+    def record(key, ok, note=""):
+        results[key] = (bool(ok), note)
+        print(f"  {'✅' if ok else '❌'} {key} {note}", flush=True)
+        return ok
+
+    t0 = time.time()
+    code, out = s.start(name, cwd, conf["cmd"], "只回复一行：7 乘以 8 等于几")
+    if not record("start", code == 0, out.get("error", "")):
+        return results
+    result, st = s.turn(name)
+    reply = s.corral("reply", name)[1].get("text")
+    if not record("first-turn", result == "idle" and reply, f"{result} {time.time() - t0:.1f}s"):
+        return results
+
+    code, out = s.corral("send", name, "把下面两行原样复述，不要加别的字：\n第一行 A-1\n第二行 B-2")
+    ok = code == 0 and out.get("confirmed") is True
+    result, _ = s.turn(name) if ok else ("skipped", {})
+    record("send", ok and result == "idle", f"confirmed={out.get('confirmed')} {out.get('error', '')} turn={result}")
+
+    code, out = s.corral("send", name, "用终端工具运行 sleep 6，然后只回复：好了")
+    seen = s.until(lambda: (lambda st: st if st.get("state") in ("working", "blocked") and st.get("last_tool") or
+                            st.get("state") == "blocked" else None)(s.status(name)), 60)
+    result, _ = s.turn(name)
+    record("tool", code == 0 and seen and seen.get("state") == "working" and result == "idle",
+           f"saw={seen and (seen.get('state'), seen.get('last_tool'))} turn={result}")
+
+    code, out = s.corral("send", name, "用终端工具在前台运行这条命令：ping -c 60 127.0.0.1 ，不要放到后台，等它结束后回复：完成")
+    busy = s.until(lambda: s.status(name).get("last_tool") and s.status(name).get("state") == "working", 60)
+    if busy:
+        time.sleep(2)
+        before = s.status(name)
+        if before.get("state") != "working" or before.get("last_event") != "PreToolUse":
+            # agent 可能把命令放到后台、这一轮已经结束：没有东西可打断，这一项测不了
+            # （Claude Code 会拒绝在前台跑长时间的 sleep，所以长命令用 ping 本机）
+            record("esc", False, f"not testable: before esc state={before.get('state')} "
+                                 f"last_event={before.get('last_event')}")
+            busy = None
+    if busy:
+        t_esc = time.time()
+        s.corral("keys", name, "esc")
+        if conf["esc"] == "stopped-quiet":
+            code, out = s.corral("wait", name, "--quiet", "5", "--timeout", "40")
+            got = out.get("result")
+        else:
+            got = "idle" if s.until(lambda: s.status(name).get("state") == "idle", 20) else s.status(name).get("state")
+        record("esc", got == conf["esc"], f"{got} {time.time() - t_esc:.1f}s")
+    elif "esc" not in results:
+        now = s.status(name)
+        said = (s.corral("reply", name)[1].get("text") or "").strip().replace("\n", " ")[-80:]
+        record("esc", False, f"agent did not start the long tool call: state={now.get('state')} "
+                             f"last_event={now.get('last_event')} reply={said!r}")
+
+    t_stop = time.time()
+    code, out = s.corral("stop", name, timeout=120)
+    s.started.remove(name)
+    record("stop", code == 0 and out.get("stopped_by") == conf["stop"],
+           f"stopped_by={out.get('stopped_by')} exit={out.get('exit_code')} {time.time() - t_stop:.1f}s")
+
+    if delegator:
+        check_delegator(s, kind, conf, cwd, record)
+    return results
+
+
+def check_delegator(s, kind, conf, cwd, record):
+    a, b = f"smoke/{kind}-main", f"smoke/{kind}-helper"
+    helper = " ".join(HELPER)
+    task = (
+        "做一个小测试，严格按步骤，不要做别的：\n"
+        f"1) 运行：corral start {b} --cwd {s.temp_cwd} --prompt '写一段约 80 字介绍声音的传播，最后一行只写 DONE' -- {helper}\n"
+        f"2) 立刻运行：corral send \"$CORRAL_NAME\" '{b} 这一轮结束了' --after {b} --timeout 300\n"
+        "3) 只回复「已交出」，结束这一轮，不要等它。\n"
+        f"之后收到「{b} 这一轮结束了」时，运行 corral reply {b}，只回复它回复的最后一行。"
+    )
+    code, out = s.start(a, cwd, conf["cmd"], task)
+    if not record("delegator-start", code == 0, out.get("error", "")):
+        return
+    s.started.append(b)
+    result, _ = s.turn(a)
+    helper_seen = s.corral("status", b)[0] == 0
+    if not record("delegator-handoff", result == "idle" and helper_seen, f"turn={result} helper_started={helper_seen}"):
+        return
+    b_done = s.until(lambda: (lambda st: st if st.get("state") == "idle" and st.get("last_event") == "Stop"
+                              else None)(s.status(b)), 240)
+    if not record("helper-done", b_done, ""):
+        return
+    reminded = s.until(lambda: (lambda st: st if st.get("last_input_source") == "send" and
+                                (st.get("last_input_at") or 0) > b_done["last_event_at"] else None)(s.status(a)), 120)
+    result, _ = s.turn(a) if reminded else ("skipped", {})
+    reply = (s.corral("reply", a)[1].get("text") or "").strip()
+    record("delegator-reminded", reminded and result == "idle", f"turn={result} reply_last_line={reply.splitlines()[-1:]}")
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="smoke", description="用真实 agent 冒烟 corral 的各家适配")
+    ap.add_argument("--agents", default="claude,codex,pi,omp", help="逗号分隔，默认四家都跑")
+    ap.add_argument("--no-delegator", action="store_true", help="不跑当委派方的测试")
+    args = ap.parse_args()
+    kinds = [k.strip() for k in args.agents.split(",") if k.strip()]
+    unknown = [k for k in kinds if k not in AGENTS]
+    if unknown:
+        ap.error(f"unknown agents: {unknown}; known: {sorted(AGENTS)}")
+
+    s = Smoke()
+    summary = []
+    try:
+        for kind in kinds:
+            conf = AGENTS[kind]
+            ver = version(conf["version"])
+            print(f"== {kind} ({ver})", flush=True)
+            results = check_agent(s, kind, conf, not args.no_delegator)
+            summary.append((kind, ver, results))
+    except KeyboardInterrupt:
+        print("interrupted", flush=True)
+    finally:
+        leftovers = s.cleanup()
+
+    print("\n| agent | 版本 | 结果 |\n|---|---|---|")
+    failed = False
+    for kind, ver, results in summary:
+        bad = [k for k, (ok, _) in results.items() if not ok]
+        failed = failed or bool(bad) or not results
+        print(f"| {kind} | {ver} | {'全部通过' if not bad else '未通过：' + '、'.join(bad)} |")
+    if leftovers:
+        failed = True
+        print(f"\n残留 agent（已尝试停止仍在）：{leftovers}")
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

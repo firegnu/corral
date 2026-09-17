@@ -11,7 +11,7 @@
 | R3 | 管理面板：在一个终端程序里既看状态又能操作 agent | 未开始，只登记 | R1 在 side project 里用过一段时间，记下最常做的操作 |
 | R4 | 适配 pi | 已完成（2026-09-17），真实 pi 实测通过 | Claude Code、Codex 两家在 side project 里测稳 |
 | R5 | 适配 amp | 已调查，暂时接不了 | amp 支持按启动参数加载插件，或人决定接受全局插件的例外 |
-| R6 | 上游 agent 升级后的真实冒烟 | 未开始 | 无，可以随时做 |
+| R6 | 上游 agent 升级后的真实冒烟 | 脚本已完成（2026-09-17），`tools/smoke` | 无 |
 | R7 | 适配 omp | 已完成（2026-09-17），真实 omp 实测通过 | 无 |
 
 ---
@@ -221,15 +221,16 @@ corral 的状态、送达确认、回复全靠各家 agent 的钩子事件。Cla
 
 ### 做什么
 
-- 一个冒烟脚本，放在 `tools/smoke`，配套工具，不进内核。用单独的短路径状态目录，不碰用户正在用的 agent，用完清理。
+- 冒烟脚本 `tools/smoke`（2026-09-17 已完成），配套工具，不进内核。用法：`tools/smoke [--agents claude,codex,pi,omp] [--no-delegator]`，默认四家都跑，一次约 8 分钟，退出码 0 表示全部通过。用单独的短路径状态目录，不碰用户正在用的 agent，用完清理。
 - 每家 agent 跑同一组检查，只核对机制，不核对模型回答的内容：
   - `--prompt` 启动后到 idle，`reply` 取得到回复；
   - 多行 `send` 确认送达；
   - 调用一次工具，看到 working 和工具名，结束回到 idle；
-  - Esc 打断：Codex、pi 回到 idle，Claude Code 用 `wait --quiet` 得到 stopped-quiet；
+  - Esc 打断：让 agent 在前台跑一条长命令（`ping -c 60 127.0.0.1`；Claude Code 会拒绝在前台跑长时间的 `sleep`，还可能把它放到后台，那样就没东西可打断），按 Esc 前再确认还在干活。Codex、pi、omp 回到 idle，Claude Code 用 `wait --quiet` 得到 stopped-quiet；
   - `stop` 按这家的方式正常退出；
   - 当委派方：用 `send --after` 交出任务，对方做完后被提醒。
-- 模型用便宜的：Claude Code 当委派方用 sonnet、当被委派方可以用 haiku；Codex 用便宜档；pi 用它的默认模型。
+- 模型用便宜的：Claude Code 用 sonnet，委派测试里被开出来的一方用 haiku；Codex 用便宜档；pi、omp 用各自的默认模型；omp 带 `--approval-mode yolo`。
+- 工作目录：Claude Code、pi、omp 用 `/tmp` 下的临时目录，不在真实项目里跑，免得 agent 往项目里写记忆；Codex 只信任列表里的目录，用家目录。
 - 输出一张表：每家 agent 的版本号、每项检查通过与否。结果连同版本号记进本文档下方的「冒烟记录」。
 
 ### 什么时候跑
@@ -243,6 +244,7 @@ corral 的状态、送达确认、回复全靠各家 agent 的钩子事件。Cla
 | 日期 | Claude Code | Codex | pi | 结果 |
 |---|---|---|---|---|
 | 2026-09-17（基线，还没有冒烟脚本） | 2.1.274，日常使用正常 | codex-cli 0.154.0，日常使用正常 | 0.85.1，完整真实验收通过（见 R4） | 冒烟脚本做好后补第一条正式记录 |
+| 2026-09-17 第一次正式冒烟 | 2.1.274 | codex-cli 0.154.0 | 0.85.1 | 四家全部通过；另有 omp 18.2.3 全部通过（当天从 18.2.2 升级）。首次跑时 Claude Code 的打断项误报成 idle：原因是它把长 `sleep` 放到了后台，已改成 ping 本机并在按 Esc 前确认，重跑确认打断行为没变 |
 
 ### 止损点
 
