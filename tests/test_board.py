@@ -182,6 +182,21 @@ class PanelTest(AgentTestCase):
         panel = self.open()
         self.assertTrue(self.seen(panel, "hello-board"))
 
+    def test_enter_refuses_agent_attached_elsewhere(self):
+        self.idle_agents("demo/a")
+        other = Window(self.home, "demo/a")  # 另一个终端里已经接入了
+        self.terms.append(other)
+        self.addCleanup(other.close)
+        self.assertTrue(self.attached("demo/a", 1))
+        viewer = self.open("--viewer")
+        panel = self.open()
+        self.assertTrue(self.seen(panel, "demo/a"))
+        panel.type(b"\r")
+        self.assertTrue(self.seen(panel, "已在别处接入"))
+        self.until(lambda: False, timeout=1.0)
+        self.assertEqual(self.status("demo/a").get("attached"), 1)  # 右格没有接进去，不会只读乱显示
+        self.assertNotIn(b"[corral]", viewer.output)
+
     def test_enter_without_viewer_tells_how_to_start_one(self):
         self.idle_agents("demo/a")
         panel = self.open()

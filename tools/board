@@ -32,7 +32,7 @@ import unicodedata
 CORRAL = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin", "corral")
 COLUMNS = ("名字", "种类", "实例", "状态", "正在做", "无输出", "接入", "最近输入", "标题")
 POLL = 0.2
-HELP = "↑↓ 选  回车/点击 在右格显示  PgUp/PgDn 翻回复  x 关掉  q 退出"
+KEYS = (("↑↓", "选"), ("回车/点击", "在右格显示"), ("PgUp/PgDn", "翻回复"), ("x", "关掉"), ("q", "退出"))
 
 
 def corral(*args, timeout=15):
@@ -97,9 +97,14 @@ def collect(prefix):
     return out
 
 
-def table_lines(records):
+def col_widths(records):
     table = [COLUMNS] + [r["cells"] for r in records]
-    widths = [max(width(r[i]) for r in table) for i in range(len(COLUMNS))]
+    return [max(width(r[i]) for r in table) for i in range(len(COLUMNS))]
+
+
+def table_lines(records):
+    widths = col_widths(records)
+    table = [COLUMNS] + [r["cells"] for r in records]
     return ["  ".join(pad(c, w) for c, w in zip(r, widths)).rstrip() for r in table]
 
 
@@ -279,6 +284,7 @@ class Panel:
         self.message = ""
         self.confirm = None  # 等按 y 确认要关掉的名字
         self.row_at = {}  # 屏幕行号 -> 名字，给鼠标点击用
+        self.pairs = {}  # (前景, 背景) -> curses 颜色对
         self.wake_table = threading.Event()
         self.wake_reply = threading.Event()
 
@@ -335,9 +341,13 @@ class Panel:
         if not info:
             self.message = "右格没有显示器：在旁边一格运行 tools/board --viewer"
             return
-        rec = next((r for r in self.records or [] if r["name"] == name), None)
-        if info.get("showing") != name and rec and rec["attached"]:
-            self.message = f"{name} 已在别处接入，右格只能看不能打字"
+        if info.get("showing") == name:
+            return
+        code, st = corral("status", name)  # 现查，不用表格里几秒前的接入数
+        if code == 0 and st.get("attached"):
+            # 后接入的窗口只读，画面尺寸又跟着先接入的窗口走，右格会乱；干脆不接
+            self.message = f"{name} 已在别处接入，先在那边按 Ctrl-] 断开"
+            return
         write_json(channel("target"), {"name": name, "seq": time.time_ns()})
 
     def handle(self, key, page):
@@ -371,15 +381,77 @@ class Panel:
             self.confirm = self.selected
             self.message = f"关掉 {self.selected}？按 y 确认，其他键取消"
 
-    # 画
+    # 画：配色只用终端的标准色，背景跟随主题；256 色终端上标题栏、底栏是深灰底，选中行是深蓝底
 
-    def put(self, scr, y, text, attr=0):
+    def color(self, fg=-1, bg=-1, extra=0):
+        if not curses.has_colors():
+            return extra
+        if (fg, bg) not in self.pairs:
+            n = len(self.pairs) + 1
+            curses.init_pair(n, fg, bg)
+            self.pairs[(fg, bg)] = curses.color_pair(n)
+        return self.pairs[(fg, bg)] | extra
+
+    def line(self, scr, y, segs, fill=None):
+        """在第 y 行从左到右画 (文字, 属性) 片段，超宽截断；给了 fill 就用它把这一行剩下的铺满。"""
         h, w = scr.getmaxyx()
-        if 0 <= y < h:
+        if not 0 <= y < h:
+            return
+        x = 0
+        for text, attr in segs:
+            if x >= w - 1:
+                break
+            text = cut(text, w - 1 - x)
             try:
-                scr.addstr(y, 0, cut(text, w - 1), attr)
+                scr.addstr(y, x, text, attr)
             except curses.error:
                 pass
+            x += width(text)
+        if fill is not None and x < w:
+            try:
+                scr.addstr(y, x, " " * (w - 1 - x), fill)
+                scr.insstr(y, w - 1, " ", fill)
+            except curses.error:
+                pass
+
+    def row_segs(self, r, widths, showing):
+        name, state, cells = r["name"], r["state"], r["cells"]
+        selected = name is not None and name == self.selected
+        if selected and not curses.has_colors():
+            return [("  " + "  ".join(pad(c, w) for c, w in zip(cells, widths)), curses.A_REVERSE)], curses.A_REVERSE
+        fg, bg = (self.sel_fg, self.sel_bg) if selected else (-1, -1)
+        base = self.color(fg, bg)
+        if showing and name == showing:
+            segs = [("▶ ", self.color(curses.COLOR_GREEN, bg))]
+        elif state == "blocked":
+            segs = [("! ", self.color(curses.COLOR_RED, bg, curses.A_BOLD))]
+        else:
+            segs = [("  ", base)]
+        elsewhere = r["attached"] - (1 if name == showing else 0) > 0
+        for i, (c, w) in enumerate(zip(cells, widths)):
+            if i:
+                segs.append(("  ", base))
+            if i == 0:
+                attr = self.color(fg, bg, curses.A_BOLD if state == "blocked" else 0)
+            elif i == 3:
+                attr = self.state_attr(state, bg)
+            elif i == 6 and elsewhere:
+                attr = self.color(curses.COLOR_MAGENTA, bg, curses.A_BOLD)
+            elif i in (1, 2, 5, 7, 8) and not selected:
+                attr = self.color(extra=curses.A_DIM)
+            else:
+                attr = base
+            segs.append((pad(c, w), attr))
+        return segs, base if selected else None
+
+    def state_attr(self, state, bg):
+        if state == "working":
+            return self.color(curses.COLOR_YELLOW, bg)
+        if state == "blocked":
+            return self.color(curses.COLOR_RED, bg, curses.A_BOLD)
+        if state == "idle":
+            return self.color(curses.COLOR_GREEN, bg)
+        return self.color(self.gray, bg, 0 if self.gray != -1 else curses.A_DIM)  # starting、exiting、查不到的
 
     def draw(self, scr):
         h, w = scr.getmaxyx()
@@ -389,43 +461,61 @@ class Panel:
         if records is not None and self.selected not in self.names():
             self.select(next(iter(self.names()), None))
         scr.erase()
-        right = f"右格：{showing}" if showing else ("右格：空闲" if info else "右格没有显示器")
-        self.put(scr, 0, f"corral 看板  {time.strftime('%H:%M:%S')}  {right}")
+        bar = self.bar
+        left = [(" corral 看板", bar | curses.A_BOLD), (f"  {time.strftime('%H:%M:%S')}", bar)]
+        if showing:
+            name_attr = self.color(curses.COLOR_CYAN, self.bar_bg, curses.A_BOLD) | self.bar_extra
+            right = [("右格：", bar), (showing, name_attr)]
+        elif info:
+            right = [("右格：空闲", bar)]
+        else:
+            right = [("右格没有显示器", self.color(curses.COLOR_YELLOW, self.bar_bg, curses.A_BOLD) | self.bar_extra)]
+        gap = w - 1 - sum(width(t) for t, _ in left + right) - 2
+        self.line(scr, 0, left + [(" " * max(1, gap), bar)] + right + [("  ", bar)], fill=bar)
         self.row_at = {}
         y = 1
         if records is None:
-            self.put(scr, y, "读取中…")
+            self.line(scr, y, [("读取中…", 0)])
             y += 1
         else:
-            lines = table_lines(records)
-            self.put(scr, y, "  " + lines[0], curses.A_BOLD)
+            widths = col_widths(records)
+            self.line(scr, y, [("  " + "  ".join(pad(c, cw) for c, cw in zip(COLUMNS, widths)),
+                                curses.A_BOLD | curses.A_UNDERLINE)])
             y += 1
             if not records:
-                self.put(scr, y, "（没有 agent）")
+                self.line(scr, y, [("（没有 agent）", 0)])
                 y += 1
             rows = max(1, min(len(records), h - 9))  # 至少给回复留几行
             names = [r["name"] for r in records]
             i = names.index(self.selected) if self.selected in names else 0
             self.top = min(max(self.top, i - rows + 1), i, max(0, len(records) - rows))
-            for r, line in list(zip(records, lines[1:]))[self.top:self.top + rows]:
-                attr = curses.A_REVERSE if r["name"] == self.selected else 0
-                if r["state"] == "blocked":
-                    attr |= curses.color_pair(1)
-                self.put(scr, y, ("▶ " if showing and r["name"] == showing else "  ") + line, attr)
+            for r in records[self.top:self.top + rows]:
+                segs, fill = self.row_segs(r, widths, showing)
+                self.line(scr, y, segs, fill=fill)
                 if r["name"]:
                     self.row_at[y] = r["name"]
                 y += 1
         name, text = self.reply
         if self.selected:
-            self.put(scr, y, f"── {self.selected} 上一轮回复 " + "─" * w, curses.A_DIM)
+            title = f"{self.selected} 上一轮回复"
+            gray = self.color(self.gray, extra=0 if self.gray != -1 else curses.A_DIM)
+            self.line(scr, y, [("── ", gray), (title, self.color(curses.COLOR_CYAN, extra=curses.A_BOLD)),
+                               (" " + "─" * w, gray)])
             y += 1
             body = wrap(text, w - 1) if name == self.selected else ["读取中…"]
             avail = h - 1 - y
             self.reply_top = max(0, min(self.reply_top, len(body) - avail))
             for line in body[self.reply_top:self.reply_top + avail]:
-                self.put(scr, y, line)
+                self.line(scr, y, [(" " + line, 0)])
                 y += 1
-        self.put(scr, h - 1, self.message or HELP, curses.A_BOLD if self.message else curses.A_DIM)
+        if self.message:
+            segs = [(" " + self.message, self.color(curses.COLOR_YELLOW, self.bar_bg, curses.A_BOLD) | self.bar_extra)]
+        else:
+            key = self.color(curses.COLOR_CYAN, self.bar_bg, curses.A_BOLD) | self.bar_extra
+            segs = [(" ", bar)]
+            for k, v in KEYS:
+                segs += [(k, key), (f" {v}   ", bar)]
+        self.line(scr, h - 1, segs, fill=bar)
         scr.refresh()
 
     def run(self, scr):
@@ -435,7 +525,11 @@ class Panel:
             pass
         if curses.has_colors():
             curses.use_default_colors()
-            curses.init_pair(1, curses.COLOR_RED, -1)
+        rich = curses.has_colors() and curses.COLORS >= 256
+        self.gray = 8 if curses.has_colors() and curses.COLORS >= 16 else -1
+        self.bar_bg, self.bar_extra = (236, 0) if rich else (-1, curses.A_REVERSE)
+        self.sel_fg, self.sel_bg = (15, 24) if rich else (curses.COLOR_WHITE, curses.COLOR_BLUE)
+        self.bar = self.color(7 if rich else -1, self.bar_bg) | self.bar_extra
         curses.mousemask(curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED)
         curses.mouseinterval(0)
         scr.timeout(int(POLL * 1000))
