@@ -185,6 +185,20 @@ class PanelTest(AgentTestCase):
         panel = self.open()
         self.assertTrue(self.seen(panel, "hello-board"))
 
+    def test_wheel_scrolls_reply_and_does_not_pick_rows(self):
+        self.idle_agents("demo/a", script=["reply:" + "a" * 3000 + "END"])
+        self.states_until("demo/a", lambda s: s.get("last_event") == "Stop")
+        self.open("--viewer")
+        panel = self.open()
+        self.assertTrue(self.seen(panel, "aaaa"))
+        self.until(lambda: False, timeout=0.5)
+        self.assertNotIn(b"END", panel.output)  # 回复比回复区长，末尾还没露出来
+        wheel_down = "\x1b[<65;10;{}M"  # SGR 格式的滚轮向下，x=10，y 从 1 数
+        panel.type(wheel_down.format(4).encode() * 3)  # 第 4 行是 demo/a 这一行：只滚动，不接入
+        panel.type(wheel_down.format(15).encode() * 5)  # 回复区里
+        self.assertTrue(self.seen(panel, "END"))
+        self.assertEqual(self.status("demo/a").get("attached"), 0)
+
     def test_enter_refuses_agent_attached_elsewhere(self):
         self.idle_agents("demo/a")
         other = Window(self.home, "demo/a")  # 另一个终端里已经接入了

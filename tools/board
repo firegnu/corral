@@ -32,9 +32,10 @@ import unicodedata
 
 CORRAL = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin", "corral")
 COLUMNS = ("名字", "种类", "实例", "状态", "正在做", "无输出", "接入", "最近输入", "标题")
-POLL = 0.2
+POLL = 0.05  # 面板和显示器互相看对方的间隔：点了 agent 后，右格和箭头要跟得上
 KEYS = (("↑↓", "选"), ("回车/点击", "在右格显示"), ("PgUp/PgDn", "翻回复"), ("s", "排序"), ("x", "关掉"), ("q", "退出"))
 SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+WHEEL_UP, WHEEL_DOWN = curses.BUTTON4_PRESSED, getattr(curses, "BUTTON5_PRESSED", 0)  # 终端通用的鼠标上报里，滚轮是 4、5 号键
 # 面板的列：键、表头、窄屏时藏掉的先后（0 = 一直显示）
 PANEL_COLUMNS = (("name", "名字", 0), ("kind", "种类", 5), ("instance", "实例", 2), ("state", "状态", 0),
                  ("doing", "正在做", 0), ("quiet", "无输出", 6), ("attached", "接入", 0), ("source", "最近输入", 4),
@@ -350,7 +351,7 @@ class Panel:
         self.order = []  # 表格里 agent 的显示顺序，给上下键用
         self.top = 0  # 表格滚动位置
         self.by_state = False  # 按 s 切换：按名字排 / 按状态排
-        self.frame = 0  # 转圈用，每画一次加一
+        self.frame = 0  # 转圈用，按时间走
         self.reply = (None, "")
         self.reply_top = 0
         self.md = (None, 0, [])  # 渲染好的回复缓存：(原文, 宽度, 屏幕行)
@@ -362,6 +363,7 @@ class Panel:
         self.new = set()  # 做完一轮、还没看过的
         self.ring = False  # 该响铃了
         self.row_at = {}  # 屏幕行号 -> 名字，给鼠标点击用
+        self.reply_y = None  # 回复正文从第几行开始，给滚轮用
         self.pairs = {}  # (前景, 背景) -> curses 颜色对
         self.wake_table = threading.Event()
         self.wake_reply = threading.Event()
@@ -538,10 +540,13 @@ class Panel:
             self.show_in_viewer()
         elif key == curses.KEY_MOUSE:
             try:
-                _, _, y, _, _ = curses.getmouse()
+                _, _, y, _, button = curses.getmouse()
             except curses.error:
                 return
-            if y in self.row_at:
+            if button & (WHEEL_UP | WHEEL_DOWN):  # 滚轮只滚回复，不选行
+                if self.reply_y is not None and y >= self.reply_y:
+                    self.reply_top = max(0, self.reply_top + (-1 if button & WHEEL_UP else 1))
+            elif y in self.row_at:
                 self.select(self.row_at[y])
                 self.show_in_viewer()
         elif key == curses.KEY_NPAGE:
@@ -644,7 +649,7 @@ class Panel:
     def draw(self, scr):
         h, w = scr.getmaxyx()
         now = time.time()
-        self.frame += 1
+        self.frame = int(now * 5)
         records = self.records
         info = viewer_info()
         showing = info.get("showing") if info else None
@@ -702,6 +707,7 @@ class Panel:
                     self.line(scr, y, [(" ", 0), (label, self.color(curses.COLOR_CYAN, extra=curses.A_BOLD))])
                 y += 1
         name, text = self.reply
+        self.reply_y = None
         if self.selected:
             title = f"{self.selected} 上一轮回复"
             rule = " " + "─" * max(0, w - 1 - width(title) - 4)
@@ -715,6 +721,7 @@ class Panel:
                     self.md = (text, w, md_lines(text, w - 2))
                 body = self.md[2]
             avail = h - 1 - y
+            self.reply_y = y
             self.reply_top = max(0, min(self.reply_top, len(body) - avail))
             for segs in body[self.reply_top:self.reply_top + avail]:
                 self.line(scr, y, [(" ", 0)] + [(t, self.style(s)) for t, s in segs])
@@ -741,7 +748,7 @@ class Panel:
         self.bar_bg, self.bar_extra = (236, 0) if rich else (-1, curses.A_REVERSE)
         self.sel_fg, self.sel_bg = (15, 24) if rich else (curses.COLOR_WHITE, curses.COLOR_BLUE)
         self.bar = self.color(7 if rich else -1, self.bar_bg) | self.bar_extra
-        curses.mousemask(curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED)
+        curses.mousemask(curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED | WHEEL_UP | WHEEL_DOWN)
         curses.mouseinterval(0)
         scr.timeout(int(POLL * 1000))
         for loop in (self.table_loop, self.reply_loop):
