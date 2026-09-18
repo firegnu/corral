@@ -571,7 +571,7 @@ class Panel:
             self.confirm = self.selected
             self.message = f"关掉 {self.selected}？按 y 确认，其他键取消"
 
-    # 画：配色只用终端的标准色，背景跟随主题；256 色终端上标题栏、底栏是深灰底，选中行是深蓝底
+    # 画：配色只用终端的标准色，背景跟随主题；256 色终端上三条横条（标题栏、回复标题、底栏）是灰底 238，选中行是深蓝底
 
     def color(self, fg=-1, bg=-1, extra=0):
         if not curses.has_colors():
@@ -729,11 +729,13 @@ class Panel:
                     self.line(scr, y, [(" ", 0), (label, self.color(curses.COLOR_CYAN, extra=curses.A_BOLD)),
                                        (count, gray), (" " + "─" * max(0, rest), gray)])
                 y += 1
-        # 回复区：标题线；正文左留 1 格、右留 1 格给滚动条
+        # 回复区：标题做成和标题栏一样的整行横条，把屏幕分成列表、回复上下两块；正文左留 1 格、右留 1 格给滚动条
         name, text, note = self.reply
-        head = [(" ", 0), ("─", gray), (" ", 0)]
-        head += [(self.selected, curses.A_BOLD), (" 上一轮回复 ", 0)] if self.selected else [("上一轮回复 ", 0)]
-        self.line(scr, y, head + [("─" * max(0, w - 1 - sum(width(t) for t, _ in head)), gray)])
+        if self.selected:
+            head = [(" ", bar), (self.selected, bar | curses.A_BOLD), (" · 上一轮回复", dim_bar)]
+        else:
+            head = [(" 上一轮回复", dim_bar)]
+        self.line(scr, y, head, fill=bar)
         y += 1
         if not self.selected:
             body = [[("（还没有回复）", "note")]]
@@ -779,7 +781,7 @@ class Panel:
             curses.use_default_colors()
         rich = curses.has_colors() and curses.COLORS >= 256
         self.gray_fg = 8 if curses.has_colors() and curses.COLORS >= 16 else -1
-        self.bar_bg, self.bar_extra = (236, 0) if rich else (-1, curses.A_REVERSE)
+        self.bar_bg, self.bar_extra = (238, 0) if rich else (-1, curses.A_REVERSE)  # 238 在深色底上比 236 显眼
         self.sel_fg, self.sel_bg = (15, 24) if rich else (curses.COLOR_WHITE, curses.COLOR_BLUE)
         self.bar = self.color(7 if rich else -1, self.bar_bg) | self.bar_extra
         curses.mousemask(curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED | WHEEL_UP | WHEEL_DOWN)
