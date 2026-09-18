@@ -1,4 +1,5 @@
 """配套工具 tools/board：只读公开输出的终端看板，面板加显示器。"""
+import importlib.util
 import json
 import os
 import pty
@@ -7,6 +8,8 @@ import subprocess
 import sys
 import time
 import unittest
+
+from importlib.machinery import SourceFileLoader
 
 from tests import support
 from tests.test_agent_state import AgentTestCase
@@ -123,7 +126,7 @@ class PanelTest(AgentTestCase):
         viewer = self.open("--viewer")
         self.assertTrue(self.seen(viewer, "没有接入"))
         panel = self.open()
-        self.assertTrue(self.seen(panel, "demo/b"))
+        self.assertTrue(self.seen(panel, "demo/（2）"))
         panel.type(b"\r")
         self.assertTrue(self.attached("demo/a", 1))
         viewer.type(b"reply:via-viewer\r")  # 在显示器里打的字送到了 demo/a
@@ -144,8 +147,8 @@ class PanelTest(AgentTestCase):
         self.idle_agents("demo/a", "demo/b")
         self.open("--viewer")
         panel = self.open()
-        self.assertTrue(self.seen(panel, "demo/b"))
-        y = 4  # 第 1 行标题、第 2 行表头、第 3 行 demo/a、第 4 行 demo/b（从 1 数）
+        self.assertTrue(self.seen(panel, "demo/（2）"))
+        y = 5  # 第 1 行标题、第 2 行表头、第 3 行分组小标题、第 4 行 demo/a、第 5 行 demo/b（从 1 数）
         if re.search(rb"\x1b\[\?[\d;]*1006[\d;]*h", panel.output):  # 面板开了 SGR 格式的鼠标上报
             panel.type(f"\x1b[<0;5;{y}M\x1b[<0;5;{y}m".encode())
         else:
@@ -157,7 +160,7 @@ class PanelTest(AgentTestCase):
         self.idle_agents("demo/a")
         viewer = self.open("--viewer")
         panel = self.open()
-        self.assertTrue(self.seen(panel, "demo/a"))
+        self.assertTrue(self.seen(panel, "demo/（1）"))
         panel.type(b"\r")
         self.assertTrue(self.attached("demo/a", 1))
         self.assertEqual(self.cli("stop", "demo/a")[0], 0)
@@ -166,7 +169,7 @@ class PanelTest(AgentTestCase):
     def test_x_asks_and_only_y_stops(self):
         self.idle_agents("demo/a")
         panel = self.open()
-        self.assertTrue(self.seen(panel, "demo/a"))
+        self.assertTrue(self.seen(panel, "demo/（1）"))
         panel.type(b"x")
         self.assertTrue(self.seen(panel, "按 y 确认"))
         panel.type(b"n")
@@ -190,7 +193,7 @@ class PanelTest(AgentTestCase):
         self.assertTrue(self.attached("demo/a", 1))
         viewer = self.open("--viewer")
         panel = self.open()
-        self.assertTrue(self.seen(panel, "demo/a"))
+        self.assertTrue(self.seen(panel, "demo/（1）"))
         panel.type(b"\r")
         self.assertTrue(self.seen(panel, "已在别处接入"))
         self.until(lambda: False, timeout=1.0)
@@ -200,7 +203,7 @@ class PanelTest(AgentTestCase):
     def test_enter_without_viewer_tells_how_to_start_one(self):
         self.idle_agents("demo/a")
         panel = self.open()
-        self.assertTrue(self.seen(panel, "demo/a"))
+        self.assertTrue(self.seen(panel, "demo/（1）"))
         panel.type(b"\r")
         self.assertTrue(self.seen(panel, "tools/board --viewer"))
         self.assertEqual(self.status("demo/a").get("attached"), 0)
@@ -216,6 +219,13 @@ class PanelTest(AgentTestCase):
         self.until(lambda: False, timeout=1.0)
         self.assertEqual(self.status("demo/a").get("attached"), 0)
 
+    def test_groups_and_marks_turn_that_just_finished(self):
+        self.idle_agents("demo/a", "demo/b")
+        panel = self.open()
+        self.assertTrue(self.seen(panel, "demo/（2）"))
+        self.assertEqual(self.cli("send", "demo/b", "reply:done")[0], 0)  # 光标在 demo/a 上，demo/b 做完一轮
+        self.assertTrue(self.seen(panel, "●"))
+
     def test_only_one_viewer_and_q_quits(self):
         first = self.open("--viewer")
         self.assertTrue(self.seen(first, "没有接入"))
@@ -226,6 +236,142 @@ class PanelTest(AgentTestCase):
         first.type(b"q")
         self.assertTrue(first.exited())
         self.assertEqual(first.exit_code, 0)
+
+
+def load_board():
+    loader = SourceFileLoader("board", BOARD)
+    spec = importlib.util.spec_from_loader("board", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
+def rec(name, state="idle", instance="i1", last_output=None, started=None, attached=0, cwd="/tmp/x", turn=None):
+    """面板的一条记录，和 collect() 产出的一样。"""
+    st = {"state": state, "instance": instance, "kind": "claude", "last_output": last_output, "started": started,
+          "attached": attached, "turn_started": turn, "last_tool": None}
+    return {"name": name, "state": state, "attached": attached, "st": st, "instance": instance, "cwd": cwd,
+            "starting": False, "cells": (name, "claude", instance, state, "", "", str(attached), "", "")}
+
+
+class PanelLogicTest(unittest.TestCase):
+    """面板里不需要终端的部分：直接加载 tools/board 调函数。"""
+
+    def setUp(self):
+        self.board = load_board()
+        self.board.viewer_info = lambda: None  # 不去碰本机真实的传话目录
+
+    def panel(self, **kw):
+        return self.board.Panel(None, 3.0, **kw)
+
+    def test_short_dir(self):
+        short = self.board.short_dir
+        self.assertEqual(short("/Users/u/Developer/p/owlet", "/Users/u"), "…/p/owlet")
+        self.assertEqual(short("/Users/u/proj", "/Users/u"), "~/proj")
+        self.assertEqual(short("/Users/u", "/Users/u"), "~")
+        self.assertEqual(short("/tmp/crt-x", "/Users/u"), "/tmp/crt-x")
+        self.assertEqual(short(None, "/Users/u"), "")
+
+    def test_markdown(self):
+        lines = self.board.md_lines("# 标题\n- 一项 **重点** 和 `code`\n```\nx = 1\n```\n普通", 40)
+        self.assertEqual(lines, [
+            [("标题", "head")],
+            [("• ", "bullet"), ("一项 ", None), ("重点", "bold"), (" 和 ", None), ("code", "code")],
+            [("│ ", "rule"), ("x = 1", "code")],
+            [("普通", None)],
+        ])
+
+    def test_markdown_wraps_with_hanging_indent(self):
+        lines = self.board.md_lines("- " + "字" * 7, 12)
+        self.assertEqual(lines, [[("• ", "bullet"), ("字" * 5, None)], [("  ", None), ("字" * 2, None)]])
+
+    def test_narrow_width_hides_columns_in_order(self):
+        keys = [k for k, _, _ in self.board.PANEL_COLUMNS]
+        widths = dict.fromkeys(keys, 5)
+        self.assertEqual(self.board.fit_columns(widths, 100), keys)
+        self.assertEqual(self.board.fit_columns(widths, 60), [k for k in keys if k not in ("title", "instance")])
+        self.assertEqual(self.board.fit_columns(widths, 10), ["name", "state", "doing", "attached"])
+
+    def test_finished_turn_is_marked_until_selected(self):
+        p = self.panel()
+        p.absorb([rec("demo/a", "working"), rec("demo/b", "idle")])
+        self.assertEqual(p.new, set())  # 刚打开时看到的不算变化
+        p.absorb([rec("demo/a", "idle"), rec("demo/b", "idle")])
+        self.assertEqual(p.new, {"demo/a"})
+        self.assertEqual(p.marker(p.records[0], time.time()), "●")
+        p.select("demo/a")
+        self.assertEqual(p.new, set())
+
+    def test_short_turn_between_refreshes_is_marked(self):
+        p = self.panel()
+        p.absorb([rec("demo/a", "idle", turn=100.0)])
+        p.absorb([rec("demo/a", "idle", turn=100.0)])
+        self.assertEqual(p.new, set())
+        p.absorb([rec("demo/a", "idle", turn=200.0)])  # 两次刷新之间跑完了一整轮，没看到 working
+        self.assertEqual(p.new, {"demo/a"})
+
+    def test_selected_agent_is_not_marked(self):
+        p = self.panel()
+        p.selected = "demo/a"
+        p.absorb([rec("demo/a", "working")])
+        p.absorb([rec("demo/a", "idle")])
+        self.assertEqual(p.new, set())
+
+    def test_exit_is_reported_and_restart_is_not_a_change(self):
+        p = self.panel()
+        p.absorb([rec("demo/a", "working"), rec("demo/b")])
+        p.absorb([rec("demo/a", "working")])
+        self.assertIn("demo/b 已退出", p.message)
+        p.absorb([rec("demo/a", "idle", instance="i2")])  # 同名重开，是另一个实例
+        self.assertEqual(p.new, set())
+
+    def test_bell_on_turn_end_and_blocked(self):
+        p = self.panel(bell=True)
+        p.absorb([rec("demo/a", "working")])
+        p.absorb([rec("demo/a", "blocked")])
+        self.assertTrue(p.ring)
+        p.ring = False
+        p.absorb([rec("demo/a", "working")])
+        self.assertFalse(p.ring)
+        p.absorb([rec("demo/a", "idle")])
+        self.assertTrue(p.ring)
+        quiet = self.panel()
+        quiet.absorb([rec("demo/a", "working")])
+        quiet.absorb([rec("demo/a", "blocked")])
+        self.assertFalse(quiet.ring)
+
+    def test_suspect_stuck(self):
+        now = time.time()
+        p = self.panel(stuck_start=60, stuck_quiet=120)
+        self.assertEqual(p.marker(rec("demo/a", "working", last_output=now - 200), now), "?")
+        self.assertEqual(p.marker(rec("demo/a", "working", last_output=now - 10), now), " ")
+        self.assertEqual(p.marker(rec("demo/a", "starting", started=now - 100), now), "?")
+        self.assertEqual(p.marker(rec("demo/a", "starting", started=now - 10), now), " ")
+        self.assertEqual(p.marker(rec("demo/a", "blocked", last_output=now - 200), now), "!")
+
+    def test_groups_and_sort_by_state(self):
+        p = self.panel()
+        p.absorb([rec("demo/c"), rec("owlet/a", "working"), rec("owlet/b"), rec("owlet/z", "blocked")])
+        now = time.time()
+
+        def shape(rows):
+            return [(r["group"], r["count"]) if "count" in r else r["rec"]["name"] for r in rows]
+
+        self.assertEqual(shape(p.view(now)), [("demo/", 1), "demo/c", ("owlet/", 3), "owlet/a", "owlet/b", "owlet/z"])
+        p.by_state = True
+        self.assertEqual(shape(p.view(now))[2:], [("owlet/", 3), "owlet/z", "owlet/a", "owlet/b"])
+        self.assertEqual(p.cells(p.records[1], "owlet/", now)["name"], "a")
+
+    def test_spinner_turns_on_working_rows(self):
+        p = self.panel()
+        r = rec("demo/a", "working")
+        p.frame = 0
+        first = p.cells(r, "demo/", time.time())["doing"]
+        p.frame = 1
+        second = p.cells(r, "demo/", time.time())["doing"]
+        self.assertNotEqual(first[0], second[0])
+        self.assertEqual(first[1:], second[1:])
+        self.assertEqual(p.cells(rec("demo/a", "idle"), "demo/", time.time())["doing"], "")
 
 
 if __name__ == "__main__":

@@ -18,6 +18,7 @@ import curses
 import json
 import locale
 import os
+import re
 import select
 import signal
 import subprocess
@@ -32,7 +33,14 @@ import unicodedata
 CORRAL = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin", "corral")
 COLUMNS = ("名字", "种类", "实例", "状态", "正在做", "无输出", "接入", "最近输入", "标题")
 POLL = 0.2
-KEYS = (("↑↓", "选"), ("回车/点击", "在右格显示"), ("PgUp/PgDn", "翻回复"), ("x", "关掉"), ("q", "退出"))
+KEYS = (("↑↓", "选"), ("回车/点击", "在右格显示"), ("PgUp/PgDn", "翻回复"), ("s", "排序"), ("x", "关掉"), ("q", "退出"))
+SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+# 面板的列：键、表头、窄屏时藏掉的先后（0 = 一直显示）
+PANEL_COLUMNS = (("name", "名字", 0), ("kind", "种类", 5), ("instance", "实例", 2), ("state", "状态", 0),
+                 ("doing", "正在做", 0), ("quiet", "无输出", 6), ("attached", "接入", 0), ("source", "最近输入", 4),
+                 ("dir", "目录", 3), ("title", "标题", 1))
+DIM_COLUMNS = ("kind", "instance", "quiet", "source", "dir", "title")
+STATE_RANK = {"blocked": 0, "working": 2, "starting": 3, "idle": 5}  # 按状态排时的先后；疑似卡住排 1
 
 
 def corral(*args, timeout=15):
@@ -68,7 +76,8 @@ def collect(prefix):
     """每个 agent 一条：名字、状态、接入窗口数，和表格里的一行。"""
     code, listing = corral("ls")
     if code != 0:
-        return [{"name": None, "state": None, "attached": 0,
+        return [{"name": None, "state": None, "attached": 0, "st": {}, "instance": None, "cwd": None,
+                 "starting": False,
                  "cells": ("(corral ls 失败)", "", "", listing.get("error", ""), "", "", "", "", "")}]
     now = time.time()
     out = []
@@ -93,7 +102,9 @@ def collect(prefix):
                 cells = (name, st.get("kind") or "", (st.get("instance") or "")[:6], st.get("state") or "", doing,
                          secs(st.get("idle_for")), str(st.get("attached", "")), st.get("last_input_source") or "",
                          cut(st.get("title") or "", 28))
-        out.append({"name": name, "state": st.get("state"), "attached": st.get("attached") or 0, "cells": cells})
+        out.append({"name": name, "state": st.get("state"), "attached": st.get("attached") or 0, "cells": cells,
+                    "st": st, "instance": item.get("instance"), "cwd": item.get("cwd"),
+                    "starting": bool(item.get("starting"))})
     return out
 
 
@@ -255,34 +266,101 @@ def viewer():
 
 # ---- 面板
 
-def wrap(text, n):
-    """按显示宽度折行；去掉控制字符。"""
-    out = []
-    for para in text.splitlines() or [""]:
-        line, w = "", 0
-        for ch in para.expandtabs(4):
-            if unicodedata.category(ch) == "Cc":
-                continue
+def short_dir(path, home=os.path.expanduser("~")):
+    """家目录写成 ~，太长只留最后两段。"""
+    if not path:
+        return ""
+    if path == home or path.startswith(home + os.sep):
+        path = "~" + path[len(home):]
+    parts = path.split(os.sep)
+    return path if len(parts) <= 3 else "…/" + "/".join(parts[-2:])
+
+
+def fit_columns(widths, avail):
+    """窄屏时按先后藏掉次要列，返回要显示的列键。行首标记占 3 格，列之间空 2 格。"""
+    keys = [k for k, _, _ in PANEL_COLUMNS]
+    for _, k in sorted((p, k) for k, _, p in PANEL_COLUMNS if p):
+        if 3 + sum(widths[k] for k in keys) + 2 * (len(keys) - 1) <= avail:
+            break
+        keys.remove(k)
+    return keys
+
+
+def inline(s):
+    """行内的 `代码` 和 **粗体**。"""
+    segs = []
+    for part in re.split(r"(`[^`]+`|\*\*[^*]+\*\*)", s):
+        if len(part) > 2 and part[0] == part[-1] == "`":
+            segs.append((part[1:-1], "code"))
+        elif len(part) > 4 and part.startswith("**") and part.endswith("**"):
+            segs.append((part[2:-2], "bold"))
+        elif part:
+            segs.append((part, None))
+    return segs
+
+
+def fold(segs, n, hang):
+    """按显示宽度把一行样式片段折成多行，续行缩进 hang 格。"""
+    lines, cur, w = [], [], 0
+    for text, style in segs:
+        buf = ""
+        for ch in text:
             cw = width(ch)
-            if w + cw > n:
-                out.append(line)
-                line, w = "", 0
-            line += ch
+            if w + cw > n and w > hang:
+                if buf:
+                    cur.append((buf, style))
+                    buf = ""
+                lines.append(cur)
+                cur, w = ([(" " * hang, None)] if hang else []), hang
+            buf += ch
             w += cw
-        out.append(line)
+        if buf:
+            cur.append((buf, style))
+    lines.append(cur)
+    return lines
+
+
+def md_lines(text, n):
+    """把回复里常见的 Markdown 简单渲染成屏幕行，每行是 [(文字, 样式)]；表格、链接原样。"""
+    out, code = [], False
+    for raw in text.splitlines() or [""]:
+        line = "".join(ch for ch in raw.expandtabs(4) if unicodedata.category(ch) != "Cc")
+        if line.lstrip().startswith("```"):
+            code = not code
+            continue
+        if code:
+            segs, hang = [("│ ", "rule"), (line, "code")], 2
+        elif m := re.match(r"#{1,6}\s+(.*)", line):
+            segs, hang = [(m.group(1), "head")], 0
+        elif m := re.match(r"(\s*)[-*+]\s+(.*)", line):
+            lead = m.group(1) + "• "
+            segs, hang = [(lead, "bullet")] + inline(m.group(2)), width(lead)
+        else:
+            segs, hang = inline(line), 0
+        out += fold(segs, n, hang)
     return out
 
 
 class Panel:
-    def __init__(self, prefix, every):
+    def __init__(self, prefix, every, bell=False, stuck_start=60.0, stuck_quiet=120.0):
         self.prefix, self.every = prefix, every
+        self.bell, self.stuck_start, self.stuck_quiet = bell, stuck_start, stuck_quiet
         self.records = None  # None = 还没取到
         self.selected = None  # 按名字记，列表变化时光标不跳
+        self.order = []  # 表格里 agent 的显示顺序，给上下键用
         self.top = 0  # 表格滚动位置
+        self.by_state = False  # 按 s 切换：按名字排 / 按状态排
+        self.frame = 0  # 转圈用，每画一次加一
         self.reply = (None, "")
         self.reply_top = 0
+        self.md = (None, 0, [])  # 渲染好的回复缓存：(原文, 宽度, 屏幕行)
         self.message = ""
         self.confirm = None  # 等按 y 确认要关掉的名字
+        self.stopping = set()  # 从面板关掉的，消失时不再提示「已退出」
+        self.prev = {}  # 名字 -> (实例, 状态, 这一轮开始的时间)，上一次刷新看到的
+        self.first_seen = {}  # 名字 -> 第一次看到的时间（ls 里还在启动的项没有状态可查）
+        self.new = set()  # 做完一轮、还没看过的
+        self.ring = False  # 该响铃了
         self.row_at = {}  # 屏幕行号 -> 名字，给鼠标点击用
         self.pairs = {}  # (前景, 背景) -> curses 颜色对
         self.wake_table = threading.Event()
@@ -292,7 +370,7 @@ class Panel:
 
     def table_loop(self):
         while True:
-            self.records = collect(self.prefix)
+            self.absorb(collect(self.prefix))
             self.wake_table.wait(self.every)
             self.wake_table.clear()
 
@@ -312,10 +390,102 @@ class Panel:
             self.wake_reply.clear()
 
     def stop(self, name):
+        self.stopping.add(name)
         self.message = f"正在关 {name}…"
         code, out = corral("stop", name, timeout=120)
         self.message = f"已关掉 {name}" if code == 0 else f"关 {name} 失败：{out.get('error') or code}"
         self.wake_table.set()
+
+    def absorb(self, records):
+        """记下这次刷新相对上一次的变化：做完一轮的标 ●，变成卡住或做完时按需响铃，消失的提示已退出。"""
+        if any(r["name"] is None for r in records):  # corral ls 失败，不算谁退出了
+            self.records = records
+            return
+        info = viewer_info()
+        showing = info.get("showing") if info else None
+        seen = {}
+        for r in records:
+            name, state, turn = r["name"], r["state"], r["st"].get("turn_started")
+            self.first_seen.setdefault(name, time.time())
+            old = self.prev.get(name)  # (实例, 状态, 这一轮开始的时间)
+            if not old or old[0] != r["instance"]:
+                self.new.discard(name)  # 第一次看到，或者同名重开了：不算变化
+            # 做完一轮：上次在干活、这次空闲；或者两次刷新之间跑完了一整轮（这一轮开始的时间变了）
+            elif state == "idle" and (old[1] == "working" or (turn and turn != old[2])):
+                if name not in (self.selected, showing):
+                    self.new.add(name)
+                self.ring = self.ring or self.bell
+            elif state == "blocked" and old[1] != "blocked":
+                self.ring = self.ring or self.bell
+            seen[name] = (r["instance"], state, turn)
+        gone = [n for n in self.prev if n not in seen]
+        exited = [n for n in gone if n not in self.stopping]
+        if exited and not self.confirm:
+            self.message = "、".join(exited) + " 已退出"
+        for n in gone:
+            self.new.discard(n)
+            self.first_seen.pop(n, None)
+            self.stopping.discard(n)
+        self.prev = seen
+        self.records = records
+
+    # 每一行显示什么
+
+    def quiet(self, r, now):
+        last = r["st"].get("last_output")
+        return None if last is None else max(0.0, now - last)
+
+    def suspect(self, r, now):
+        """疑似卡住：一直在启动，或者在干活却很久没有任何输出（多半是被 Esc 打断了，Claude Code 打断时没有事件）。"""
+        if r["state"] == "working":
+            q = self.quiet(r, now)
+            return q is not None and q >= self.stuck_quiet
+        if r["state"] == "starting" or r["starting"]:
+            since = r["st"].get("started") or self.first_seen.get(r["name"], now)
+            return now - since >= self.stuck_start
+        return False
+
+    def marker(self, r, now):
+        if r["state"] == "blocked":
+            return "!"
+        if self.suspect(r, now):
+            return "?"
+        return "●" if r["name"] in self.new else " "
+
+    def rank(self, r, now):
+        return 1 if self.suspect(r, now) else STATE_RANK.get(r["state"], 4)
+
+    def view(self, now):
+        """表格要画的行：每组一行小标题 {"group", "count"}，下面是组内的 agent {"group", "rec"}。"""
+        groups = {}
+        for r in self.records or []:
+            name = r["name"] or ""
+            groups.setdefault(name[:name.index("/") + 1] if "/" in name else "", []).append(r)
+        rows = []
+        for g in sorted(groups):
+            rs = groups[g]
+            if self.by_state:
+                rs = sorted(rs, key=lambda r: (self.rank(r, now), r["name"] or ""))
+            rows.append({"group": g, "count": len(rs)})
+            rows += [{"group": g, "rec": r} for r in rs]
+        return rows
+
+    def cells(self, r, g, now):
+        st, state = r["st"], r["state"]
+        name = (r["name"] or "")[len(g):] or r["cells"][0]
+        if not st:  # 启动中、不兼容、查不到：沿用 --once 那一行的说明
+            return {"name": name, "kind": r["cells"][1], "instance": "", "state": r["cells"][3], "doing": "",
+                    "quiet": "", "attached": "", "source": "", "dir": short_dir(r["cwd"]), "title": ""}
+        doing = ""
+        if state in ("working", "blocked"):
+            elapsed = secs(now - st["turn_started"]) if st.get("turn_started") else ""
+            doing = f"{st.get('last_tool') or '思考/输出'} {elapsed}".strip()
+            if state == "working":
+                doing = SPIN[self.frame % len(SPIN)] + " " + doing
+        return {"name": name, "kind": st.get("kind") or "", "instance": (st.get("instance") or "")[:6],
+                "state": state or "", "doing": doing, "quiet": secs(self.quiet(r, now)),
+                "attached": str(st.get("attached", "")), "source": st.get("last_input_source") or "",
+                "dir": short_dir(r["cwd"]), "title": cut(st.get("title") or "", 28)}
 
     # 按键
 
@@ -323,12 +493,13 @@ class Panel:
         return [r["name"] for r in self.records or [] if r["name"]]
 
     def select(self, name):
+        self.new.discard(name)
         if name != self.selected:
             self.selected, self.reply_top = name, 0
             self.wake_reply.set()
 
     def move(self, step):
-        names = self.names()
+        names = self.order or self.names()
         if names:
             i = names.index(self.selected) if self.selected in names else 0
             self.select(names[max(0, min(len(names) - 1, i + step))])
@@ -377,6 +548,8 @@ class Panel:
             self.reply_top += page
         elif key == curses.KEY_PPAGE:
             self.reply_top = max(0, self.reply_top - page)
+        elif key == ord("s"):
+            self.by_state = not self.by_state
         elif key == ord("x") and self.selected:
             self.confirm = self.selected
             self.message = f"关掉 {self.selected}？按 y 确认，其他键取消"
@@ -391,6 +564,9 @@ class Panel:
             curses.init_pair(n, fg, bg)
             self.pairs[(fg, bg)] = curses.color_pair(n)
         return self.pairs[(fg, bg)] | extra
+
+    def gray(self, bg=-1, extra=0):
+        return self.color(self.gray_fg, bg, extra if self.gray_fg != -1 else extra | curses.A_DIM)
 
     def line(self, scr, y, segs, fill=None):
         """在第 y 行从左到右画 (文字, 属性) 片段，超宽截断；给了 fill 就用它把这一行剩下的铺满。"""
@@ -414,34 +590,40 @@ class Panel:
             except curses.error:
                 pass
 
-    def row_segs(self, r, widths, showing):
-        name, state, cells = r["name"], r["state"], r["cells"]
+    def row_segs(self, r, cells, keys, widths, showing, now):
+        name, state = r["name"], r["state"]
         selected = name is not None and name == self.selected
+        mark = self.marker(r, now)
         if selected and not curses.has_colors():
-            return [("  " + "  ".join(pad(c, w) for c, w in zip(cells, widths)), curses.A_REVERSE)], curses.A_REVERSE
+            text = ("▶" if showing and name == showing else " ") + mark + " "
+            return [(text + "  ".join(pad(cells[k], widths[k]) for k in keys), curses.A_REVERSE)], curses.A_REVERSE
         fg, bg = (self.sel_fg, self.sel_bg) if selected else (-1, -1)
         base = self.color(fg, bg)
-        if showing and name == showing:
-            segs = [("▶ ", self.color(curses.COLOR_GREEN, bg))]
-        elif state == "blocked":
-            segs = [("! ", self.color(curses.COLOR_RED, bg, curses.A_BOLD))]
-        else:
-            segs = [("  ", base)]
-        elsewhere = r["attached"] - (1 if name == showing else 0) > 0
-        for i, (c, w) in enumerate(zip(cells, widths)):
+        mark_attr = {"!": self.color(curses.COLOR_RED, bg, curses.A_BOLD),
+                     "?": self.color(curses.COLOR_YELLOW, bg, curses.A_BOLD),
+                     "●": self.color(curses.COLOR_CYAN, bg, curses.A_BOLD)}.get(mark, base)
+        shown = showing and name == showing
+        segs = [("▶" if shown else " ", self.color(curses.COLOR_GREEN, bg) if shown else base),
+                (mark, mark_attr), (" ", base)]
+        elsewhere = r["attached"] - (1 if shown else 0) > 0
+        q = self.quiet(r, now) if state == "working" else None
+        for i, k in enumerate(keys):
             if i:
                 segs.append(("  ", base))
-            if i == 0:
+            if k == "name":
                 attr = self.color(fg, bg, curses.A_BOLD if state == "blocked" else 0)
-            elif i == 3:
+            elif k == "state":
                 attr = self.state_attr(state, bg)
-            elif i == 6 and elsewhere:
+            elif k == "attached" and elsewhere:
                 attr = self.color(curses.COLOR_MAGENTA, bg, curses.A_BOLD)
-            elif i in (1, 2, 5, 7, 8) and not selected:
+            elif k == "quiet" and q is not None and q >= 30:  # 在干活却没输出：越久越显眼
+                attr = self.color(curses.COLOR_RED if q >= self.stuck_quiet else curses.COLOR_YELLOW, bg,
+                                  curses.A_BOLD if q >= self.stuck_quiet else 0)
+            elif k in DIM_COLUMNS and not selected:
                 attr = self.color(extra=curses.A_DIM)
             else:
                 attr = base
-            segs.append((pad(c, w), attr))
+            segs.append((pad(cells[k], widths[k]), attr))
         return segs, base if selected else None
 
     def state_attr(self, state, bg):
@@ -451,18 +633,30 @@ class Panel:
             return self.color(curses.COLOR_RED, bg, curses.A_BOLD)
         if state == "idle":
             return self.color(curses.COLOR_GREEN, bg)
-        return self.color(self.gray, bg, 0 if self.gray != -1 else curses.A_DIM)  # starting、exiting、查不到的
+        return self.gray(bg)  # starting、exiting、查不到的
+
+    def style(self, name):
+        """回复区 Markdown 样式对应的属性。"""
+        return {"head": self.color(curses.COLOR_CYAN, extra=curses.A_BOLD),
+                "bullet": self.color(curses.COLOR_CYAN), "code": self.color(curses.COLOR_YELLOW),
+                "rule": self.gray(), "bold": curses.A_BOLD}.get(name, 0)
 
     def draw(self, scr):
         h, w = scr.getmaxyx()
+        now = time.time()
+        self.frame += 1
         records = self.records
         info = viewer_info()
         showing = info.get("showing") if info else None
+        if showing:
+            self.new.discard(showing)
         if records is not None and self.selected not in self.names():
-            self.select(next(iter(self.names()), None))
+            self.select(next(iter(self.order or self.names()), None))
         scr.erase()
         bar = self.bar
         left = [(" corral 看板", bar | curses.A_BOLD), (f"  {time.strftime('%H:%M:%S')}", bar)]
+        if self.by_state:
+            left.append(("  按状态排", bar))
         if showing:
             name_attr = self.color(curses.COLOR_CYAN, self.bar_bg, curses.A_BOLD) | self.bar_extra
             right = [("右格：", bar), (showing, name_attr)]
@@ -478,35 +672,52 @@ class Panel:
             self.line(scr, y, [("读取中…", 0)])
             y += 1
         else:
-            widths = col_widths(records)
-            self.line(scr, y, [("  " + "  ".join(pad(c, cw) for c, cw in zip(COLUMNS, widths)),
+            rows = self.view(now)
+            for row in rows:
+                if "rec" in row:
+                    row["cells"] = self.cells(row["rec"], row["group"], now)
+            widths = {k: max([width(head)] + [width(r["cells"][k]) for r in rows if "rec" in r])
+                      for k, head, _ in PANEL_COLUMNS}
+            keys = fit_columns(widths, w - 1)
+            heads = dict((k, head) for k, head, _ in PANEL_COLUMNS)
+            self.line(scr, y, [("   " + "  ".join(pad(heads[k], widths[k]) for k in keys),
                                 curses.A_BOLD | curses.A_UNDERLINE)])
             y += 1
             if not records:
                 self.line(scr, y, [("（没有 agent）", 0)])
                 y += 1
-            rows = max(1, min(len(records), h - 9))  # 至少给回复留几行
-            names = [r["name"] for r in records]
-            i = names.index(self.selected) if self.selected in names else 0
-            self.top = min(max(self.top, i - rows + 1), i, max(0, len(records) - rows))
-            for r in records[self.top:self.top + rows]:
-                segs, fill = self.row_segs(r, widths, showing)
-                self.line(scr, y, segs, fill=fill)
-                if r["name"]:
-                    self.row_at[y] = r["name"]
+            self.order = [r["rec"]["name"] for r in rows if "rec" in r and r["rec"]["name"]]
+            avail = max(1, min(len(rows), h - 9))  # 至少给回复留几行
+            at = [i for i, r in enumerate(rows) if "rec" in r and r["rec"]["name"] == self.selected]
+            i = at[0] if at else 0
+            self.top = min(max(self.top, i - avail + 1), i, max(0, len(rows) - avail))
+            for row in rows[self.top:self.top + avail]:
+                if "rec" in row:
+                    segs, fill = self.row_segs(row["rec"], row["cells"], keys, widths, showing, now)
+                    self.line(scr, y, segs, fill=fill)
+                    if row["rec"]["name"]:
+                        self.row_at[y] = row["rec"]["name"]
+                else:
+                    label = f"{row['group'] or '（无前缀）'}（{row['count']}）"
+                    self.line(scr, y, [(" ", 0), (label, self.color(curses.COLOR_CYAN, extra=curses.A_BOLD))])
                 y += 1
         name, text = self.reply
         if self.selected:
             title = f"{self.selected} 上一轮回复"
-            gray = self.color(self.gray, extra=0 if self.gray != -1 else curses.A_DIM)
-            self.line(scr, y, [("── ", gray), (title, self.color(curses.COLOR_CYAN, extra=curses.A_BOLD)),
-                               (" " + "─" * w, gray)])
+            rule = " " + "─" * max(0, w - 1 - width(title) - 4)
+            self.line(scr, y, [("── ", self.gray()), (title, self.color(curses.COLOR_CYAN, extra=curses.A_BOLD)),
+                               (rule, self.gray())])
             y += 1
-            body = wrap(text, w - 1) if name == self.selected else ["读取中…"]
+            if name != self.selected:
+                body = [[("读取中…", None)]]
+            else:
+                if self.md[:2] != (text, w):
+                    self.md = (text, w, md_lines(text, w - 2))
+                body = self.md[2]
             avail = h - 1 - y
             self.reply_top = max(0, min(self.reply_top, len(body) - avail))
-            for line in body[self.reply_top:self.reply_top + avail]:
-                self.line(scr, y, [(" " + line, 0)])
+            for segs in body[self.reply_top:self.reply_top + avail]:
+                self.line(scr, y, [(" ", 0)] + [(t, self.style(s)) for t, s in segs])
                 y += 1
         if self.message:
             segs = [(" " + self.message, self.color(curses.COLOR_YELLOW, self.bar_bg, curses.A_BOLD) | self.bar_extra)]
@@ -526,7 +737,7 @@ class Panel:
         if curses.has_colors():
             curses.use_default_colors()
         rich = curses.has_colors() and curses.COLORS >= 256
-        self.gray = 8 if curses.has_colors() and curses.COLORS >= 16 else -1
+        self.gray_fg = 8 if curses.has_colors() and curses.COLORS >= 16 else -1
         self.bar_bg, self.bar_extra = (236, 0) if rich else (-1, curses.A_REVERSE)
         self.sel_fg, self.sel_bg = (15, 24) if rich else (curses.COLOR_WHITE, curses.COLOR_BLUE)
         self.bar = self.color(7 if rich else -1, self.bar_bg) | self.bar_extra
@@ -537,6 +748,9 @@ class Panel:
             threading.Thread(target=loop, daemon=True).start()
         while True:
             self.draw(scr)
+            if self.ring:
+                self.ring = False
+                curses.beep()
             key = scr.getch()
             if key == ord("q") and not self.confirm:
                 return
@@ -550,6 +764,9 @@ def main():
     ap.add_argument("--once", action="store_true", help="只打印一次状态表")
     ap.add_argument("--prefix", help="只看名字以它开头的 agent，如 demo/")
     ap.add_argument("--viewer", action="store_true", help="作为显示器运行，放在面板旁边一格")
+    ap.add_argument("--bell", action="store_true", help="agent 做完一轮或卡住时终端响一声")
+    ap.add_argument("--stuck-start", type=float, default=60.0, help="启动超过这么多秒标疑似卡住，默认 60")
+    ap.add_argument("--stuck-quiet", type=float, default=120.0, help="在干活却这么多秒没输出标疑似卡住，默认 120")
     args = ap.parse_args()
     if args.once:
         print(render(args.prefix))
@@ -558,7 +775,7 @@ def main():
         return viewer()
     locale.setlocale(locale.LC_ALL, "")
     try:
-        curses.wrapper(Panel(args.prefix, args.every).run)
+        curses.wrapper(Panel(args.prefix, args.every, args.bell, args.stuck_start, args.stuck_quiet).run)
     except KeyboardInterrupt:
         pass
     return 0
