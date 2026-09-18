@@ -126,7 +126,7 @@ class PanelTest(AgentTestCase):
         viewer = self.open("--viewer")
         self.assertTrue(self.seen(viewer, "没有接入"))
         panel = self.open()
-        self.assertTrue(self.seen(panel, "demo/（2）"))
+        self.assertTrue(self.seen(panel, "（2）"))
         panel.type(b"\r")
         self.assertTrue(self.attached("demo/a", 1))
         viewer.type(b"reply:via-viewer\r")  # 在显示器里打的字送到了 demo/a
@@ -147,7 +147,7 @@ class PanelTest(AgentTestCase):
         self.idle_agents("demo/a", "demo/b")
         self.open("--viewer")
         panel = self.open()
-        self.assertTrue(self.seen(panel, "demo/（2）"))
+        self.assertTrue(self.seen(panel, "（2）"))
         y = 5  # 第 1 行标题、第 2 行表头、第 3 行分组小标题、第 4 行 demo/a、第 5 行 demo/b（从 1 数）
         if re.search(rb"\x1b\[\?[\d;]*1006[\d;]*h", panel.output):  # 面板开了 SGR 格式的鼠标上报
             panel.type(f"\x1b[<0;5;{y}M\x1b[<0;5;{y}m".encode())
@@ -160,7 +160,7 @@ class PanelTest(AgentTestCase):
         self.idle_agents("demo/a")
         viewer = self.open("--viewer")
         panel = self.open()
-        self.assertTrue(self.seen(panel, "demo/（1）"))
+        self.assertTrue(self.seen(panel, "（1）"))
         panel.type(b"\r")
         self.assertTrue(self.attached("demo/a", 1))
         self.assertEqual(self.cli("stop", "demo/a")[0], 0)
@@ -169,7 +169,7 @@ class PanelTest(AgentTestCase):
     def test_x_asks_and_only_y_stops(self):
         self.idle_agents("demo/a")
         panel = self.open()
-        self.assertTrue(self.seen(panel, "demo/（1）"))
+        self.assertTrue(self.seen(panel, "（1）"))
         panel.type(b"x")
         self.assertTrue(self.seen(panel, "按 y 确认"))
         panel.type(b"n")
@@ -217,7 +217,7 @@ class PanelTest(AgentTestCase):
         self.assertTrue(self.attached("demo/a", 1))
         viewer = self.open("--viewer")
         panel = self.open()
-        self.assertTrue(self.seen(panel, "demo/（1）"))
+        self.assertTrue(self.seen(panel, "（1）"))
         panel.type(b"\r")
         self.assertTrue(self.seen(panel, "已在别处接入"))
         self.until(lambda: False, timeout=1.0)
@@ -227,7 +227,7 @@ class PanelTest(AgentTestCase):
     def test_enter_without_viewer_tells_how_to_start_one(self):
         self.idle_agents("demo/a")
         panel = self.open()
-        self.assertTrue(self.seen(panel, "demo/（1）"))
+        self.assertTrue(self.seen(panel, "（1）"))
         panel.type(b"\r")
         self.assertTrue(self.seen(panel, "tools/board --viewer"))
         self.assertEqual(self.status("demo/a").get("attached"), 0)
@@ -246,7 +246,7 @@ class PanelTest(AgentTestCase):
     def test_groups_and_marks_turn_that_just_finished(self):
         self.idle_agents("demo/a", "demo/b")
         panel = self.open()
-        self.assertTrue(self.seen(panel, "demo/（2）"))
+        self.assertTrue(self.seen(panel, "（2）"))
         self.assertEqual(self.cli("send", "demo/b", "reply:done")[0], 0)  # 光标在 demo/a 上，demo/b 做完一轮
         self.assertTrue(self.seen(panel, "●"))
 
@@ -385,6 +385,45 @@ class PanelLogicTest(unittest.TestCase):
         p.by_state = True
         self.assertEqual(shape(p.view(now))[2:], [("owlet/", 3), "owlet/z", "owlet/a", "owlet/b"])
         self.assertEqual(p.cells(p.records[1], "owlet/", now)["name"], "a")
+
+    def test_scrollbar_and_short_hints(self):
+        class Screen:  # 只记字符的假屏幕
+            def __init__(s, h, w):
+                s.h, s.w, s.g = h, w, [[" "] * w for _ in range(h)]
+
+            def getmaxyx(s):
+                return s.h, s.w
+
+            def erase(s):
+                s.g = [[" "] * s.w for _ in range(s.h)]
+
+            def addstr(s, y, x, text, attr=0):
+                for ch in text:
+                    for i in range(self.board.width(ch)):  # 中文占两格，第二格留空
+                        if x < s.w:
+                            s.g[y][x] = "" if i else ch
+                        x += 1
+
+            insstr = addstr
+
+            def refresh(s):
+                pass
+
+        curses = self.board.curses
+        self.addCleanup(setattr, curses, "has_colors", curses.has_colors)  # 共用的 curses 模块，测完还原
+        curses.has_colors = lambda: False
+        p = self.panel()
+        p.gray_fg, p.bar_bg, p.bar_extra, p.sel_fg, p.sel_bg, p.bar = -1, -1, 0, -1, -1, 0
+        p.absorb([rec("demo/a")])
+        p.selected = "demo/a"
+        p.reply = ("demo/a", "\n".join(f"第 {i} 行" for i in range(60)), False)
+        wide, narrow = Screen(20, 100), Screen(20, 60)
+        p.draw(wide, None)
+        p.draw(narrow, None)
+        right = {row[-1] for row in wide.g[5:19]}
+        self.assertEqual(right, {"░", "█"})  # 回复放不下：最右一列是滚动条
+        self.assertIn("回车/点击 在右格显示", "".join(wide.g[19]))
+        self.assertIn("回车 显示", "".join(narrow.g[19]))  # 不足 80 列换短提示
 
     def test_spinner_turns_on_working_rows(self):
         p = self.panel()
