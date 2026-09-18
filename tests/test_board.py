@@ -185,6 +185,16 @@ class PanelTest(AgentTestCase):
         panel = self.open()
         self.assertTrue(self.seen(panel, "hello-board"))
 
+    def test_spinner_keeps_turning_while_working(self):
+        self.start("demo/a", "claude", script=["tool:60"])
+        self.states_until("demo/a", lambda s: s.get("last_tool") == "Bash")
+        panel = self.open()
+        self.assertTrue(self.seen(panel, "Bash"))
+        mark = len(panel.output)
+        self.until(lambda: False, timeout=1.5)
+        frames = {ch for ch in panel.output[mark:].decode("utf-8", "replace") if ch in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"}
+        self.assertGreaterEqual(len(frames), 3, frames)
+
     def test_wheel_scrolls_reply_and_does_not_pick_rows(self):
         self.idle_agents("demo/a", script=["reply:" + "a" * 3000 + "END"])
         self.states_until("demo/a", lambda s: s.get("last_event") == "Stop")

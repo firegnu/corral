@@ -646,12 +646,18 @@ class Panel:
                 "bullet": self.color(curses.COLOR_CYAN), "code": self.color(curses.COLOR_YELLOW),
                 "rule": self.gray(), "bold": curses.A_BOLD}.get(name, 0)
 
-    def draw(self, scr):
+    def stamp(self, info):
+        """屏幕内容取决于的东西。和上次画的时候一样就不用重画：时钟、秒数按秒变，转圈一秒 5 格。"""
+        now = time.time()
+        working = any(r["state"] == "working" for r in self.records or [])
+        return (id(self.records), self.reply, self.selected, self.message, len(self.new), bool(info),
+                info.get("showing") if info else None, int(now), int(now * 5) if working else 0)
+
+    def draw(self, scr, info):
         h, w = scr.getmaxyx()
         now = time.time()
         self.frame = int(now * 5)
         records = self.records
-        info = viewer_info()
         showing = info.get("showing") if info else None
         if showing:
             self.new.discard(showing)
@@ -753,8 +759,12 @@ class Panel:
         scr.timeout(int(POLL * 1000))
         for loop in (self.table_loop, self.reply_loop):
             threading.Thread(target=loop, daemon=True).start()
+        drawn, key = None, 0
         while True:
-            self.draw(scr)
+            info = viewer_info()  # 每圈都看，右格换了人箭头马上跟上
+            if key != -1 or self.stamp(info) != drawn:  # 按了键，或者屏幕上该变的变了，才重画
+                self.draw(scr, info)
+                drawn = self.stamp(info)
             if self.ring:
                 self.ring = False
                 curses.beep()
