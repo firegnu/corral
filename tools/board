@@ -1,26 +1,43 @@
 #!/usr/bin/env python3
-"""corral 看板：在终端里实时列出所有 agent 的状态和正在做什么。
+"""corral 看板：在终端里实时列出所有 agent 的状态，选中一个让旁边一格显示它。
 
-配套工具，不属于 corral 内核：只调用本仓库的 `corral ls` 和 `corral status`，只读，不操作任何 agent，
-不读状态目录里的文件。按 Ctrl-C 退出。
+配套工具，不属于 corral 内核：只调用本仓库 bin/corral 的公开命令（ls、status、reply、attach、stop），
+不读状态目录里的文件。
 
-用法：tools/board [--every 秒] [--once] [--prefix 名字前缀]
+三种用法：
+  tools/board            面板：状态表，下面是选中 agent 的上一轮回复。回车或鼠标点一行，让显示器接入它；
+                         x 再按 y 关掉它；q 退出。
+  tools/board --viewer   显示器：放在面板旁边一格。面板选了谁，它就在这一格里替你运行 corral attach；
+                         换人时先断开当前的（被断开的 agent 继续跑）。按 Ctrl-] 断开后回到空闲画面，空闲时按 q 退出。
+  tools/board --once     只打印一次状态表。
+
+面板和显示器通过 board 自己的临时目录（$TMPDIR/corral-board-<uid>/）传话，和 corral 的状态目录无关。
 """
 import argparse
+import curses
 import json
+import locale
 import os
+import select
+import signal
 import subprocess
 import sys
+import tempfile
+import termios
+import threading
 import time
+import tty
 import unicodedata
 
 CORRAL = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin", "corral")
 COLUMNS = ("名字", "种类", "实例", "状态", "正在做", "无输出", "接入", "最近输入", "标题")
+POLL = 0.2
+HELP = "↑↓ 选  回车/点击 在右格显示  PgUp/PgDn 翻回复  x 关掉  q 退出"
 
 
-def corral(*args):
+def corral(*args, timeout=15):
     try:
-        proc = subprocess.run([sys.executable, CORRAL, *args], capture_output=True, text=True, timeout=15)
+        proc = subprocess.run([sys.executable, CORRAL, *args], capture_output=True, text=True, timeout=timeout)
         return proc.returncode, json.loads(proc.stdout)
     except (subprocess.TimeoutExpired, ValueError):
         return -1, {}
@@ -47,65 +64,411 @@ def secs(x):
     return "" if x is None else (f"{int(x)}s" if x < 3600 else f"{x / 3600:.1f}h")
 
 
-def rows(prefix):
+def collect(prefix):
+    """每个 agent 一条：名字、状态、接入窗口数，和表格里的一行。"""
     code, listing = corral("ls")
     if code != 0:
-        return [("(corral ls 失败)", "", "", listing.get("error", ""), "", "", "", "", "")]
+        return [{"name": None, "state": None, "attached": 0,
+                 "cells": ("(corral ls 失败)", "", "", listing.get("error", ""), "", "", "", "", "")}]
     now = time.time()
     out = []
     for item in sorted(listing.get("agents", []), key=lambda i: i["name"]):
         name = item["name"]
         if prefix and not name.startswith(prefix):
             continue
+        st = {}
         if item.get("starting"):
-            out.append((name, "", "", "(启动中)", "", "", "", "", ""))
-            continue
-        if item.get("incompatible"):
-            out.append((name, "", "", f"(不兼容 proto {item.get('proto')})", "", "", "", "", ""))
-            continue
-        code, st = corral("status", name)
-        if code != 0:
-            out.append((name, item.get("kind") or "", "", f"(退出码 {code})", "", "", "", "", ""))
-            continue
-        doing = ""
-        if st.get("state") in ("working", "blocked"):
-            elapsed = secs(now - st["turn_started"]) if st.get("turn_started") else ""
-            doing = f"{st.get('last_tool') or '思考/输出'} {elapsed}".strip()
-        out.append((name, st.get("kind") or "", (st.get("instance") or "")[:6], st.get("state") or "", doing,
-                    secs(st.get("idle_for")), str(st.get("attached", "")), st.get("last_input_source") or "",
-                    cut(st.get("title") or "", 28)))
+            cells = (name, "", "", "(启动中)", "", "", "", "", "")
+        elif item.get("incompatible"):
+            cells = (name, "", "", f"(不兼容 proto {item.get('proto')})", "", "", "", "", "")
+        else:
+            code, st = corral("status", name)
+            if code != 0:
+                cells, st = (name, item.get("kind") or "", "", f"(退出码 {code})", "", "", "", "", ""), {}
+            else:
+                doing = ""
+                if st.get("state") in ("working", "blocked"):
+                    elapsed = secs(now - st["turn_started"]) if st.get("turn_started") else ""
+                    doing = f"{st.get('last_tool') or '思考/输出'} {elapsed}".strip()
+                cells = (name, st.get("kind") or "", (st.get("instance") or "")[:6], st.get("state") or "", doing,
+                         secs(st.get("idle_for")), str(st.get("attached", "")), st.get("last_input_source") or "",
+                         cut(st.get("title") or "", 28))
+        out.append({"name": name, "state": st.get("state"), "attached": st.get("attached") or 0, "cells": cells})
     return out
 
 
-def render(prefix):
-    table = [COLUMNS] + rows(prefix)
+def table_lines(records):
+    table = [COLUMNS] + [r["cells"] for r in records]
     widths = [max(width(r[i]) for r in table) for i in range(len(COLUMNS))]
-    lines = [f"corral 看板  {time.strftime('%H:%M:%S')}"]
-    for r in table:
-        lines.append("  ".join(pad(c, w) for c, w in zip(r, widths)).rstrip())
-    if len(table) == 1:
+    return ["  ".join(pad(c, w) for c, w in zip(r, widths)).rstrip() for r in table]
+
+
+def render(prefix):
+    records = collect(prefix)
+    lines = [f"corral 看板  {time.strftime('%H:%M:%S')}"] + table_lines(records)
+    if not records:
         lines.append("（没有 agent）")
     return "\n".join(lines)
 
 
+# ---- 面板和显示器之间传话：board 自己临时目录里的两个小文件
+
+def channel(name):
+    d = os.path.join(tempfile.gettempdir(), f"corral-board-{os.getuid()}")
+    os.makedirs(d, mode=0o700, exist_ok=True)
+    return os.path.join(d, name)
+
+
+def read_json(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def write_json(path, obj):
+    tmp = f"{path}.{os.getpid()}"
+    with open(tmp, "w") as f:
+        json.dump(obj, f)
+    os.replace(tmp, path)
+
+
+def viewer_info():
+    """在跑的显示器留下的 {"pid", "showing"}；没有显示器时返回 None。"""
+    info = read_json(channel("viewer"))
+    try:
+        os.kill(info["pid"], 0)
+    except (OSError, KeyError, TypeError):
+        return None
+    return info
+
+
+# ---- 显示器
+
+class Viewer:
+    def __init__(self):
+        self.target = channel("target")
+        t = read_json(self.target)
+        self.seen = t.get("seq") if isinstance(t, dict) else None  # 启动前留下的指令不执行
+        self.note = ""
+        self.resized = False
+
+    def set_showing(self, name):
+        write_json(channel("viewer"), {"pid": os.getpid(), "showing": name})
+
+    def next_target(self):
+        """面板写了新指令就返回要显示的名字，否则 None。"""
+        t = read_json(self.target)
+        if not isinstance(t, dict) or t.get("seq") == self.seen:
+            return None
+        self.seen = t.get("seq")
+        return t.get("name")
+
+    def draw_idle(self):
+        lines = ["corral 显示器", "", "没有接入。在面板里选一个 agent，按回车或点它。"]
+        if self.note:
+            lines += ["", self.note]
+        lines += ["", "q 退出"]
+        sys.stdout.write("\x1b[H\x1b[2J" + "\n".join(lines))
+        sys.stdout.flush()
+
+    def idle(self):
+        """画空闲画面，等面板的指令，返回要显示的名字；按 q 或终端关了返回 None。"""
+        fd = sys.stdin.fileno()
+        tty.setcbreak(fd)
+        self.draw_idle()
+        while True:
+            if self.resized:
+                self.resized = False
+                self.draw_idle()
+            r, _, _ = select.select([fd], [], [], POLL)
+            if r:
+                data = os.read(fd, 64)
+                if not data or b"q" in data:
+                    return None
+            name = self.next_target()
+            if name:
+                return name
+
+    def show(self, name):
+        """在这一格里接入 name，直到断开、agent 退出或面板换人。换人时返回下一个名字，否则 None。"""
+        self.set_showing(name)
+        proc = subprocess.Popen([sys.executable, CORRAL, "attach", name], stderr=subprocess.DEVNULL)
+        nxt = None
+        while proc.poll() is None:
+            time.sleep(POLL)
+            new = self.next_target()
+            if new and new != name:
+                nxt = new
+                proc.send_signal(signal.SIGINT)  # attach 收到 Ctrl-C 信号时自己还原终端；被断开的 agent 继续跑
+                try:
+                    proc.wait(3)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+        sys.stdout.write("\x1bc")  # 兜底：不管 attach 怎么结束的，整个终端复位
+        sys.stdout.flush()
+        self.set_showing(None)
+        if nxt is None:
+            code = proc.returncode
+            self.note = (f"已断开 {name}，它继续在跑" if code == 0 else f"{name} 已退出" if code == 2
+                         else f"接入 {name} 失败（退出码 {code}）")
+        return nxt
+
+
+def viewer():
+    info = viewer_info()
+    if info:
+        sys.stderr.write(f"已经有一个显示器在跑（pid {info['pid']}）\n")
+        return 1
+    v = Viewer()
+    fd = sys.stdin.fileno()
+    saved = termios.tcgetattr(fd)
+    signal.signal(signal.SIGWINCH, lambda *_: setattr(v, "resized", True))
+    v.set_showing(None)
+    try:
+        name = None
+        while True:
+            if name is None:
+                name = v.idle()
+                if name is None:
+                    return 0
+            termios.tcsetattr(fd, termios.TCSADRAIN, saved)  # 把终端原样交给 attach
+            name = v.show(name)
+            termios.tcsetattr(fd, termios.TCSADRAIN, saved)  # attach 被强行结束时没来得及还原
+    except KeyboardInterrupt:
+        return 0
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+        sys.stdout.write("\n")
+        try:
+            os.remove(channel("viewer"))
+        except OSError:
+            pass
+
+
+# ---- 面板
+
+def wrap(text, n):
+    """按显示宽度折行；去掉控制字符。"""
+    out = []
+    for para in text.splitlines() or [""]:
+        line, w = "", 0
+        for ch in para.expandtabs(4):
+            if unicodedata.category(ch) == "Cc":
+                continue
+            cw = width(ch)
+            if w + cw > n:
+                out.append(line)
+                line, w = "", 0
+            line += ch
+            w += cw
+        out.append(line)
+    return out
+
+
+class Panel:
+    def __init__(self, prefix, every):
+        self.prefix, self.every = prefix, every
+        self.records = None  # None = 还没取到
+        self.selected = None  # 按名字记，列表变化时光标不跳
+        self.top = 0  # 表格滚动位置
+        self.reply = (None, "")
+        self.reply_top = 0
+        self.message = ""
+        self.confirm = None  # 等按 y 确认要关掉的名字
+        self.row_at = {}  # 屏幕行号 -> 名字，给鼠标点击用
+        self.wake_table = threading.Event()
+        self.wake_reply = threading.Event()
+
+    # 后台线程：刷新表格、取回复、关 agent，都不卡按键
+
+    def table_loop(self):
+        while True:
+            self.records = collect(self.prefix)
+            self.wake_table.wait(self.every)
+            self.wake_table.clear()
+
+    def reply_loop(self):
+        while True:
+            name = self.selected
+            if name:
+                code, out = corral("reply", name)
+                if code == 0:
+                    text = out.get("text") or ""
+                elif out.get("error") == "no_reply":
+                    text = "（还没有回复）"
+                else:
+                    text = f"（取回复失败：{out.get('error') or code}）"
+                self.reply = (name, text)
+            self.wake_reply.wait(self.every)
+            self.wake_reply.clear()
+
+    def stop(self, name):
+        self.message = f"正在关 {name}…"
+        code, out = corral("stop", name, timeout=120)
+        self.message = f"已关掉 {name}" if code == 0 else f"关 {name} 失败：{out.get('error') or code}"
+        self.wake_table.set()
+
+    # 按键
+
+    def names(self):
+        return [r["name"] for r in self.records or [] if r["name"]]
+
+    def select(self, name):
+        if name != self.selected:
+            self.selected, self.reply_top = name, 0
+            self.wake_reply.set()
+
+    def move(self, step):
+        names = self.names()
+        if names:
+            i = names.index(self.selected) if self.selected in names else 0
+            self.select(names[max(0, min(len(names) - 1, i + step))])
+
+    def show_in_viewer(self):
+        name = self.selected
+        if not name:
+            return
+        info = viewer_info()
+        if not info:
+            self.message = "右格没有显示器：在旁边一格运行 tools/board --viewer"
+            return
+        rec = next((r for r in self.records or [] if r["name"] == name), None)
+        if info.get("showing") != name and rec and rec["attached"]:
+            self.message = f"{name} 已在别处接入，右格只能看不能打字"
+        write_json(channel("target"), {"name": name, "seq": time.time_ns()})
+
+    def handle(self, key, page):
+        if self.confirm:
+            name, self.confirm = self.confirm, None
+            if key in (ord("y"), ord("Y")):
+                threading.Thread(target=self.stop, args=(name,), daemon=True).start()
+            else:
+                self.message = "已取消"
+            return
+        self.message = ""
+        if key in (curses.KEY_UP, ord("k")):
+            self.move(-1)
+        elif key in (curses.KEY_DOWN, ord("j")):
+            self.move(1)
+        elif key in (10, 13, curses.KEY_ENTER):
+            self.show_in_viewer()
+        elif key == curses.KEY_MOUSE:
+            try:
+                _, _, y, _, _ = curses.getmouse()
+            except curses.error:
+                return
+            if y in self.row_at:
+                self.select(self.row_at[y])
+                self.show_in_viewer()
+        elif key == curses.KEY_NPAGE:
+            self.reply_top += page
+        elif key == curses.KEY_PPAGE:
+            self.reply_top = max(0, self.reply_top - page)
+        elif key == ord("x") and self.selected:
+            self.confirm = self.selected
+            self.message = f"关掉 {self.selected}？按 y 确认，其他键取消"
+
+    # 画
+
+    def put(self, scr, y, text, attr=0):
+        h, w = scr.getmaxyx()
+        if 0 <= y < h:
+            try:
+                scr.addstr(y, 0, cut(text, w - 1), attr)
+            except curses.error:
+                pass
+
+    def draw(self, scr):
+        h, w = scr.getmaxyx()
+        records = self.records
+        info = viewer_info()
+        showing = info.get("showing") if info else None
+        if records is not None and self.selected not in self.names():
+            self.select(next(iter(self.names()), None))
+        scr.erase()
+        right = f"右格：{showing}" if showing else ("右格：空闲" if info else "右格没有显示器")
+        self.put(scr, 0, f"corral 看板  {time.strftime('%H:%M:%S')}  {right}")
+        self.row_at = {}
+        y = 1
+        if records is None:
+            self.put(scr, y, "读取中…")
+            y += 1
+        else:
+            lines = table_lines(records)
+            self.put(scr, y, "  " + lines[0], curses.A_BOLD)
+            y += 1
+            if not records:
+                self.put(scr, y, "（没有 agent）")
+                y += 1
+            rows = max(1, min(len(records), h - 9))  # 至少给回复留几行
+            names = [r["name"] for r in records]
+            i = names.index(self.selected) if self.selected in names else 0
+            self.top = min(max(self.top, i - rows + 1), i, max(0, len(records) - rows))
+            for r, line in list(zip(records, lines[1:]))[self.top:self.top + rows]:
+                attr = curses.A_REVERSE if r["name"] == self.selected else 0
+                if r["state"] == "blocked":
+                    attr |= curses.color_pair(1)
+                self.put(scr, y, ("▶ " if showing and r["name"] == showing else "  ") + line, attr)
+                if r["name"]:
+                    self.row_at[y] = r["name"]
+                y += 1
+        name, text = self.reply
+        if self.selected:
+            self.put(scr, y, f"── {self.selected} 上一轮回复 " + "─" * w, curses.A_DIM)
+            y += 1
+            body = wrap(text, w - 1) if name == self.selected else ["读取中…"]
+            avail = h - 1 - y
+            self.reply_top = max(0, min(self.reply_top, len(body) - avail))
+            for line in body[self.reply_top:self.reply_top + avail]:
+                self.put(scr, y, line)
+                y += 1
+        self.put(scr, h - 1, self.message or HELP, curses.A_BOLD if self.message else curses.A_DIM)
+        scr.refresh()
+
+    def run(self, scr):
+        try:
+            curses.curs_set(0)
+        except curses.error:
+            pass
+        if curses.has_colors():
+            curses.use_default_colors()
+            curses.init_pair(1, curses.COLOR_RED, -1)
+        curses.mousemask(curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED)
+        curses.mouseinterval(0)
+        scr.timeout(int(POLL * 1000))
+        for loop in (self.table_loop, self.reply_loop):
+            threading.Thread(target=loop, daemon=True).start()
+        while True:
+            self.draw(scr)
+            key = scr.getch()
+            if key == ord("q") and not self.confirm:
+                return
+            if key != -1:
+                self.handle(key, max(1, scr.getmaxyx()[0] // 2))
+
+
 def main():
-    ap = argparse.ArgumentParser(prog="board", description="实时列出所有 corral agent 的状态")
+    ap = argparse.ArgumentParser(prog="board", description="实时列出所有 corral agent 的状态，选中一个让旁边一格显示它")
     ap.add_argument("--every", type=float, default=3.0, help="刷新间隔秒数，默认 3")
-    ap.add_argument("--once", action="store_true", help="只打印一次")
+    ap.add_argument("--once", action="store_true", help="只打印一次状态表")
     ap.add_argument("--prefix", help="只看名字以它开头的 agent，如 demo/")
+    ap.add_argument("--viewer", action="store_true", help="作为显示器运行，放在面板旁边一格")
     args = ap.parse_args()
     if args.once:
         print(render(args.prefix))
-        return
+        return 0
+    if args.viewer:
+        return viewer()
+    locale.setlocale(locale.LC_ALL, "")
     try:
-        while True:
-            text = render(args.prefix)
-            sys.stdout.write("\x1b[H\x1b[2J" + text + "\n")
-            sys.stdout.flush()
-            time.sleep(args.every)
+        curses.wrapper(Panel(args.prefix, args.every).run)
     except KeyboardInterrupt:
         pass
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
