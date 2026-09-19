@@ -81,7 +81,7 @@ description: "当主控：把开发任务拆开、写成任务文件，用 corra
 | 重 | 数据模型、并发和事务、跨模块设计、难查的 bug、交叉审查 | `--model 'opus[1m]' --effort xhigh` | `-m gpt-6-astra -c 'model_reasoning_effort="xhigh"'` |
 
 - 拿不准用常规；审查发现质量不够，再升一档重做。
-- `max` 和 `fable` 只在用户点名时用。Codex 的 `ultra` 会自动再往下委派，不用。
+- 下面这些很费 token，可以提议，但要先问用户，同意了才开：Claude Code 用 `fable`（任何强度）、opus 开 `max`；Codex 开 `ultra`（它还会自己再开子 agent）。用户点名就算同意。
 - pi、omp 用它们的默认，不分档。
 - 模型名会随版本变，过时了改这张表。
 
