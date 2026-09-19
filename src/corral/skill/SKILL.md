@@ -19,7 +19,7 @@ corral reply <名字>
 corral stop <名字>
 ```
 
-1. **start**：输出里的 `name` 就是之后用的名字（`--unique` 会补后缀）。第一句话必须用 `--prompt` 带上。要开 Codex，把最后换成 `-- codex --yolo`；要开 pi，换成 `-- pi`；要开 omp，换成 `-- omp --approval-mode yolo`。需要省钱时，调用方可以自己在 agent 命令后面传模型参数。
+1. **start**：输出里的 `name` 就是之后用的名字（`--unique` 会补后缀；旧的关掉后，同一个名字会被再次使用，汇报时说明是新开的）。第一句话必须用 `--prompt` 带上。要开 Codex，把最后换成 `-- codex --yolo`；要开 pi，换成 `-- pi`；要开 omp，换成 `-- omp --approval-mode yolo`。需要省钱时，调用方可以自己在 agent 命令后面传模型参数。
 2. **wait**：你的 shell 工具有超时，所以每次只等 90 秒；退出码 4 就再运行一次，直到返回。看输出里的 `result`：
    - `idle`：这一轮结束，去 reply。
    - `blocked`：对方弹了权限框或提问框。不要替它回答，告诉用户运行 `corral attach <名字>` 去处理，处理完再 wait。
@@ -39,11 +39,16 @@ corral send "$CORRAL_NAME" "<提醒的话>" --after <名字> --timeout 3600
 
 1. 交给对方的话末尾固定加上：「命令都在前台跑完，全部做完后，回复最后一行写 DONE」。
 2. 提醒的话写成「<名字> 这一轮结束了，去看它的状态和回复」。`send --after` 立即返回，告诉用户已经交出去，然后结束这一轮。
-3. 对方这一轮结束时，这句话会送进你的输入框。收到后运行 `corral status <名字>` 和 `corral reply <名字>`：
+3. **你是 Claude Code 时，再加第二条通道**：你正在忙、或用户刚在你的窗口里打过字时，提醒会晚到。所以另用 Bash 工具的后台运行（run_in_background）跑下面这条，它结束时你会被直接叫醒。两条哪条先到处理哪条；另一条晚到时先查状态，处理过的不再重复。Codex、pi、omp 不加：Codex 和 pi 的后台命令结束时不会叫醒你；omp 会，但这期间你会一直显示为在干活。
+   ```sh
+   while corral wait <名字> --timeout 90 --quiet 600; [ $? -eq 4 ]; do :; done
+   ```
+4. 对方这一轮结束时，这句话会送进你的输入框（挂了后台 wait 的，也可能先被它叫醒）。收到后运行 `corral status <名字>` 和 `corral reply <名字>`：
    - 回复最后一行是 DONE：整理结果告诉用户，说明对方还开着、名字是什么。不要 stop。
-   - 状态是 working：被叫早了，再运行一次上面的 `send --after`，结束这一轮。
+   - 状态是 working：被叫早了，再挂一次上面的提醒（Claude Code 连后台 wait 一起），结束这一轮。
+   - 后台 wait 返回 `stopped-quiet`：对方 600 秒没有动静，多半被人打断了，告诉用户。
    - 空闲、blocked 或已经不在，但没有 DONE：告诉用户去 `corral attach <名字>` 看。
-4. 让已经开着的对方接着做长活：不要重新 start，改用 `corral send <名字> "<新的话>"` 交过去，末尾同样带上 DONE 约定，再挂 `send --after`。
+5. 让已经开着的对方接着做长活：不要重新 start，改用 `corral send <名字> "<新的话>"` 交过去，末尾同样带上 DONE 约定，再挂提醒（Claude Code 同样加后台 wait）。
 
 ## 退出码
 
