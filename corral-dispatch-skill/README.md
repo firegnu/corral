@@ -4,6 +4,13 @@
 
 - `SKILL.md`：技能正文。
 - `项目AGENTS模板.md`：项目的 AGENTS.md 里要加的一节，让主控在你说「开始」时自动按本技能分派。
+- `route.py`：路由。主控拆完每件活调一次，由 TypeSafe 的分类模型建议交给哪家、几档、要不要交叉审查；拿不准或调不通时主控自己判断。只用标准库。
+
+## 路由的 key
+
+在 `~/.zshrc` 里加 `export TYPESAFE_API_KEY=<key>`。corral 开 agent 时从登录 shell 重建环境，之后开的主控都带着它；加 key 之前开的主控要重开。没有 key 时路由不可用，主控照 SKILL.md 第 3 节自己判断，分派照常。
+
+发给 TypeSafe 的只有主控写的三五句任务摘要，不发任务文件。某个项目不想发，在它的 AGENTS.md 里写一句「不用路由」。
 
 ## 安装
 
