@@ -583,30 +583,72 @@ class Panel:
             self.pairs[(fg, bg)] = curses.color_pair(n)
         return self.pairs[(fg, bg)] | extra
 
+    def hue(self, c):
+        """语义色取亮色那一档（8–15，跟着终端主题走）。框里的底色比主题还暗，标准色 0–7 在上面发灰。"""
+        return c + 8 if self.rich else c
+
     def gray(self, bg=-1, extra=0):
         return self.color(self.gray_fg, bg, extra if self.gray_fg != -1 else extra | curses.A_DIM)
 
-    def line(self, scr, y, segs, fill=None):
-        """在第 y 行从左到右画 (文字, 属性) 片段，超宽截断；给了 fill 就用它把这一行剩下的铺满。"""
+    def line(self, scr, y, segs, fill=None, box=None):
+        """在第 y 行从左到右画 (文字, 属性) 片段，超宽截断；给了 fill 就用它把这一行剩下的铺满。
+        给了 box（边框属性）就在两端画竖边，内容从第 1 格起、右边留一格给边框。"""
         h, w = scr.getmaxyx()
         if not 0 <= y < h:
             return
-        x = 0
+        x, right = 0, w - 1
+        if box is not None:
+            right = w - 2
+            try:
+                scr.addstr(y, 0, "│", box)
+            except curses.error:
+                pass
+            x = 1
         for text, attr in segs:
-            if x >= w - 1:
+            if x >= right:
                 break
-            text = cut(text, w - 1 - x)
+            text = cut(text, right - x)
             try:
                 scr.addstr(y, x, text, attr)
             except curses.error:
                 pass
             x += width(text)
-        if fill is not None and x < w:
+        if fill is not None and x < right:
             try:
-                scr.addstr(y, x, " " * (w - 1 - x), fill)
+                scr.addstr(y, x, " " * (right - x), fill)
+            except curses.error:
+                pass
+        if box is not None:
+            try:
+                scr.insstr(y, w - 1, "│", box)
+            except curses.error:
+                pass
+        elif fill is not None and x < w:
+            try:
                 scr.insstr(y, w - 1, " ", fill)
             except curses.error:
                 pass
+
+    def rule(self, scr, y, ends, label=None):
+        """框的横边：ends 是两端的角字符，label 嵌在线里（`╭─ 标签 ────╮`）。accent 给标签里要高亮的那段。"""
+        box = self.gray()
+        segs = [(ends[0] + "─", box)]
+        used = 2
+        if label:
+            segs.append((" ", box))
+            used += 1
+            for text, attr in label:
+                segs.append((text, attr))
+                used += width(text)
+            segs.append((" ", box))
+            used += 1
+        h, w = scr.getmaxyx()
+        segs.append(("─" * max(0, w - 1 - used), box))
+        self.line(scr, y, segs)
+        try:
+            scr.insstr(y, w - 1, ends[1], box)
+        except curses.error:
+            pass
 
     def row_segs(self, r, cells, keys, widths, showing, now):
         name, state = r["name"], r["state"]
@@ -616,16 +658,16 @@ class Panel:
             text = " " + ("▶" if showing and name == showing else " ") + mark + " "
             text += "  ".join(align(k, cells[k], widths[k]) for k in keys)
             return [(text, curses.A_REVERSE)], curses.A_REVERSE
-        fg, bg = (self.sel_fg, self.sel_bg) if selected else (-1, self.list_bg)
+        fg, bg = (self.sel_fg, self.sel_bg) if selected else (-1, self.box_bg)
         base = self.color(fg, bg)
         # 选中只靠左侧色条和一层更亮的底色，行内的语义色和调暗层次照旧（8 色终端下沿用整行反白）
         dim = base if selected and not self.rich else self.color(fg, bg, curses.A_DIM)
-        mark_attr = {"!": self.color(curses.COLOR_RED, bg, curses.A_BOLD),
-                     "?": self.color(curses.COLOR_YELLOW, bg, curses.A_BOLD),
-                     "●": self.color(curses.COLOR_CYAN, bg, curses.A_BOLD)}.get(mark, base)
+        mark_attr = {"!": self.color(self.hue(curses.COLOR_RED), bg, curses.A_BOLD),
+                     "?": self.color(self.hue(curses.COLOR_YELLOW), bg, curses.A_BOLD),
+                     "●": self.color(self.hue(curses.COLOR_CYAN), bg, curses.A_BOLD)}.get(mark, base)
         shown = showing and name == showing
         segs = [("▎" if selected else " ", self.color(self.accent_fg, bg, curses.A_BOLD) if selected else base),
-                ("▶" if shown else " ", self.color(curses.COLOR_GREEN, bg) if shown else base),
+                ("▶" if shown else " ", self.color(self.hue(curses.COLOR_GREEN), bg) if shown else base),
                 (mark, mark_attr), (" ", base)]
         elsewhere = r["attached"] - (1 if shown else 0) > 0
         q = self.quiet(r, now) if state == "working" else None
@@ -634,7 +676,7 @@ class Panel:
                 segs.append(("  ", base))
             text = align(k, cells[k], widths[k])
             if k == "doing" and text[:1] and text[0] in SPIN:  # 转圈单独上色
-                segs += [(text[:2], self.color(curses.COLOR_YELLOW, bg)), (text[2:], base)]
+                segs += [(text[:2], self.color(self.hue(curses.COLOR_YELLOW), bg)), (text[2:], base)]
                 continue
             if k == "name":
                 attr = self.color(fg, bg, curses.A_BOLD if state == "blocked" else 0)
@@ -643,10 +685,10 @@ class Panel:
                 segs += [("● ", attr), (align(k, cells[k], widths[k] - 2), attr)]
                 continue
             elif k == "attached":
-                attr = self.color(curses.COLOR_MAGENTA, bg, curses.A_BOLD) if elsewhere else base
+                attr = self.color(self.hue(curses.COLOR_MAGENTA), bg, curses.A_BOLD) if elsewhere else base
             elif k == "quiet":  # 在干活却没输出：越久越显眼；其余调暗
-                attr = (self.color(curses.COLOR_RED, bg, curses.A_BOLD) if q is not None and q >= self.stuck_quiet
-                        else self.color(curses.COLOR_YELLOW, bg) if q is not None and q >= 30 else dim)
+                attr = (self.color(self.hue(curses.COLOR_RED), bg, curses.A_BOLD) if q is not None and q >= self.stuck_quiet
+                        else self.color(self.hue(curses.COLOR_YELLOW), bg) if q is not None and q >= 30 else dim)
             else:
                 attr = dim if k in DIM_COLUMNS else base
             segs.append((text, attr))
@@ -654,18 +696,20 @@ class Panel:
 
     def state_attr(self, state, bg, selected_attr=None):
         if state == "working":
-            return self.color(curses.COLOR_YELLOW, bg)
+            return self.color(self.hue(curses.COLOR_YELLOW), bg)
         if state == "blocked":
-            return self.color(curses.COLOR_RED, bg, curses.A_BOLD)
+            return self.color(self.hue(curses.COLOR_RED), bg, curses.A_BOLD)
         if state == "idle":
-            return self.color(curses.COLOR_GREEN, bg)
+            return self.color(self.hue(curses.COLOR_GREEN), bg)
         return selected_attr or self.gray(bg)  # starting、exiting、查不到的；选中行跟着行的字色
 
-    def style(self, name):
-        """回复区样式对应的属性。"""
-        return {"head": self.color(curses.COLOR_CYAN, extra=curses.A_BOLD),
-                "bullet": self.color(curses.COLOR_CYAN), "code": self.color(curses.COLOR_YELLOW),
-                "rule": self.gray(), "note": self.gray(), "bold": curses.A_BOLD}.get(name, 0)
+    def style(self, name, bg=-1):
+        """回复区样式对应的属性。bg 是这一块的底色，正文也要跟着铺，不然文字是透明底、和四周不一样。"""
+        return {"head": self.color(self.hue(curses.COLOR_CYAN), bg, curses.A_BOLD),
+                "bullet": self.color(self.hue(curses.COLOR_CYAN), bg),
+                "code": self.color(self.hue(curses.COLOR_YELLOW), bg),
+                "rule": self.gray(bg), "note": self.gray(bg),
+                "bold": self.color(-1, bg, curses.A_BOLD)}.get(name, self.color(-1, bg))
 
     def stamp(self, info):
         """屏幕内容取决于的东西。和上次画的时候一样就不用重画：时钟、秒数按秒变，转圈一秒 5 格。"""
@@ -698,9 +742,17 @@ class Panel:
         gap = w - 1 - sum(width(t) for t, _ in left + right)
         self.line(scr, 0, left + [(" " * max(1, gap), bar)] + right, fill=bar)
         self.row_at = {}
+        # 列表和回复装在同一个圆角框里，中间用带标签的横线分节；框外只留顶栏和底栏当外壳
+        edge = self.gray()
+        box_fill = self.color(-1, self.box_bg)
         y = 1
+        n_agents = len(records) if records else 0
+        title = self.color(-1, -1, curses.A_BOLD)                 # 两条边上的标题用同一套：主词亮白加粗，细节灰
+        self.rule(scr, y, "╭╮", [("agents", title)] +
+                  ([(f" · {n_agents}", edge)] if records else []))
+        y += 1
         if records is None:
-            self.line(scr, y, [(" ", 0), ("loading…", gray)])
+            self.line(scr, y, [("loading…", self.gray(self.box_bg))], fill=box_fill, box=edge)
             y += 1
         else:
             rows = self.view(now)
@@ -709,46 +761,44 @@ class Panel:
                     row["cells"] = self.cells(row["rec"], row["group"], now)
             widths = {k: max([width(head), MIN_WIDTHS.get(k, 0)] + [width(r["cells"][k]) for r in rows if "rec" in r])
                       for k, head, _ in PANEL_COLUMNS}
-            keys = fit_columns(widths, w - 1)
+            keys = fit_columns(widths, w - 3)
             heads = dict((k, head) for k, head, _ in PANEL_COLUMNS)
-            list_fill = self.color(-1, self.list_bg)
-            self.line(scr, y, [("    " + "  ".join(align(k, heads[k], widths[k]) for k in keys),
-                                self.gray(self.list_bg, curses.A_BOLD))], fill=list_fill)
+            list_fill = box_fill
+            self.line(scr, y, [("   " + "  ".join(align(k, heads[k], widths[k]) for k in keys),
+                                self.gray(self.box_bg, curses.A_BOLD))], fill=list_fill, box=edge)
             y += 1
             if not records:
-                self.line(scr, y, [(" ", 0), ("(no agents)", gray)])
+                self.line(scr, y, [("(no agents)", gray)], fill=list_fill, box=edge)
                 y += 1
             self.order = [r["rec"]["name"] for r in rows if "rec" in r and r["rec"]["name"]]
-            avail = max(1, min(max(len(rows), LIST_MIN), h - 9))  # 至少 LIST_MIN 行，上限是给回复留几行
+            avail = max(1, min(max(len(rows), LIST_MIN), h - 11))  # 至少 LIST_MIN 行，上限是给回复留几行
             at = [i for i, r in enumerate(rows) if "rec" in r and r["rec"]["name"] == self.selected]
             i = at[0] if at else 0
             self.top = min(max(self.top, i - avail + 1), i, max(0, len(rows) - avail))
             for row in rows[self.top:self.top + avail]:
                 if "rec" in row:
                     segs, fill = self.row_segs(row["rec"], row["cells"], keys, widths, showing, now)
-                    self.line(scr, y, segs, fill=fill)
+                    self.line(scr, y, segs, fill=fill, box=edge)
                     if row["rec"]["name"]:
                         self.row_at[y] = row["rec"]["name"]
                 else:  # 分组小标题：组名青色，数量和一条横线灰色，画到倒数第 2 格
                     label, count = row["group"] or "(no prefix)", f" ({row['count']})"
-                    rest = w - 1 - (width(label) + width(count) + 2)
-                    self.line(scr, y, [(" ", list_fill),
-                                       (label, self.color(curses.COLOR_CYAN, self.list_bg, curses.A_BOLD)),
-                                       (count, self.gray(self.list_bg)),
-                                       (" " + "─" * max(0, rest), self.gray(self.list_bg))], fill=list_fill)
+                    rest = w - 4 - (width(label) + width(count) + 1)
+                    self.line(scr, y, [(label, self.color(self.hue(curses.COLOR_CYAN), self.box_bg, curses.A_BOLD)),
+                                       (count, self.gray(self.box_bg)),
+                                       (" " + "─" * max(0, rest), self.gray(self.box_bg))],
+                              fill=list_fill, box=edge)
                 y += 1
             for _ in range(avail - len(rows[self.top:self.top + avail])):  # 行不够就留白，底色照铺
-                self.line(scr, y, [], fill=list_fill)
+                self.line(scr, y, [], fill=list_fill, box=edge)
                 y += 1
-        # 回复区：标题做成和标题栏一样的整行横条，把屏幕分成列表、回复上下两块；正文左留 1 格、右留 1 格给滚动条
+        # 回复区：框里的一条分节线隔开，标签嵌在线里；正文右边留一格给滚动条
         name, text, note = self.reply
         if self.selected:
-            accent_bar = self.color(self.accent_fg, self.bar_bg) | self.bar_extra
-            head = [(" ", bar), ("▎", accent_bar), (self.selected, accent_bar | curses.A_BOLD),
-                    (" · last reply", dim_bar)]
+            label = [(self.selected, title), (" · last reply", edge)]
         else:
-            head = [(" last reply", dim_bar)]
-        self.line(scr, y, head, fill=bar)
+            label = [("last reply", title)]
+        self.rule(scr, y, "├┤", label)
         y += 1
         if not self.selected:
             body = [[("(no reply yet)", "note")]]
@@ -758,22 +808,27 @@ class Panel:
             body = [[(text, "note")]]
         else:
             if self.md[:2] != (text, w):
-                self.md = (text, w, md_lines(text, w - 2))
+                self.md = (text, w, md_lines(text, w - 4))
             body = self.md[2]
-        avail = h - 1 - y
+        avail = h - 2 - y                                    # 末行是底栏，倒数第 2 行是框的下边
         self.reply_y = y
         self.reply_top = max(0, min(self.reply_top, len(body) - avail))
         for segs in body[self.reply_top:self.reply_top + avail]:
-            self.line(scr, y, [(" ", 0)] + [(t, self.style(s)) for t, s in segs])
+            self.line(scr, y, [(t, self.style(s, self.box_bg)) for t, s in segs], fill=box_fill, box=edge)
             y += 1
-        if len(body) > avail > 0:  # 放不下时最右一列画滚动条：░ 轨道，█ 滑块
+        for _ in range(max(0, avail - len(body[self.reply_top:self.reply_top + avail]))):
+            self.line(scr, y, [], fill=box_fill, box=edge)
+            y += 1
+        if len(body) > avail > 0:  # 放不下时最右一列（边框里侧）画滚动条：░ 轨道，█ 滑块
             n = max(1, round(avail * avail / len(body)))
             top = min(avail - n, round(self.reply_top * avail / len(body)))
             for i in range(avail):
                 try:
-                    scr.addstr(self.reply_y + i, w - 1, "█" if top <= i < top + n else "░", gray)
+                    scr.addstr(self.reply_y + i, w - 2, "█" if top <= i < top + n else "░", gray)
                 except curses.error:
                     pass
+        self.rule(scr, y, "╰╯")
+        y += 1
         # 底栏：按键名青色，键名后空 1 格、项间空 2 格；不足 80 列用短提示；有消息时换成消息
         if self.message:
             segs = [(" " + self.message, self.color(curses.COLOR_YELLOW, self.bar_bg, curses.A_BOLD) | self.bar_extra)]
@@ -796,7 +851,7 @@ class Panel:
         self.gray_fg = 8 if curses.has_colors() and curses.COLORS >= 16 else -1
         self.bar_bg, self.bar_extra = (238, 0) if rich else (-1, curses.A_REVERSE)  # 238 在深色底上比 236 显眼
         self.rich = rich
-        self.list_bg = 235 if rich else -1            # 列表区整体一层淡底，和纯黑的回复区分成两块面板
+        self.box_bg = 233 if rich else -1             # 框里的底色：比终端主题底色暗一档，整个框像往下凹的一口井
         self.accent_fg = 39 if rich else curses.COLOR_CYAN   # 强调色：串起「选中的行」和「它的回复」
         self.sel_fg, self.sel_bg = (-1, 237) if rich else (curses.COLOR_WHITE, curses.COLOR_BLUE)
         self.bar = self.color(7 if rich else -1, self.bar_bg) | self.bar_extra
