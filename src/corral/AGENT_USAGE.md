@@ -64,6 +64,12 @@ corral send "$CORRAL_NAME" "<提醒的话>" --after <名字> --timeout 3600
 
 送成功时如果 `merged_with_draft` 是 `true`，说明输入框里原来有人留下没提交的文字，你的话接在它后面一起提交了；agent 收到了，**不要重送**，在意的话让人接入去看。
 
+## 不要按名字批量杀进程
+
+corral 启动的每个 agent，**它的栏位进程和 agent 进程的命令行里都带着名字和工作目录**。`pkill -f <项目名>`、`pgrep -f <路径> | xargs kill` 这类命令会一次打中所有沾边的 agent：开你的那个（它的名字往往最短最通用，最容易被匹配上）、和你并行干活的、以及你自己。栏位收到 SIGTERM 就会连同 agent 一起退出。
+
+要停自己起的服务：起的时候记下 PID（`cmd & echo $!`），停的时候 kill 那个 PID；或者固定端口，用 `lsof -ti:<端口> | xargs kill`。绝不按项目名或路径匹配。
+
 ## 其他命令
 
 ```sh
