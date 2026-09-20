@@ -31,18 +31,19 @@ import tty
 import unicodedata
 
 CORRAL = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin", "corral")
-COLUMNS = ("名字", "种类", "实例", "状态", "正在做", "无输出", "接入", "最近输入", "标题")
+COLUMNS = ("NAME", "KIND", "INST", "STATE", "DOING", "QUIET", "ATT", "SOURCE", "TITLE")
 POLL = 0.05  # 面板和显示器互相看对方的间隔：点了 agent 后，右格和箭头要跟得上
-KEYS = (("↑↓", "选"), ("回车/点击", "在右格显示"), ("PgUp/PgDn", "翻回复"), ("s", "排序"), ("x", "关掉"), ("q", "退出"))
-KEYS_SHORT = (("↑↓", "选"), ("回车", "显示"), ("PgUp/Dn", "翻页"), ("s", "排序"), ("x", "关掉"), ("q", "退出"))  # 不足 80 列时
+KEYS = (("↑↓", "select"), ("enter/click", "show in viewer"), ("PgUp/PgDn", "scroll"), ("s", "sort"), ("x", "stop"), ("q", "quit"))
+KEYS_SHORT = (("↑↓", "select"), ("enter", "show"), ("PgUp/Dn", "scroll"), ("s", "sort"), ("x", "stop"), ("q", "quit"))  # 不足 80 列时
 SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 WHEEL_UP, WHEEL_DOWN = curses.BUTTON4_PRESSED, getattr(curses, "BUTTON5_PRESSED", 0)  # 终端通用的鼠标上报里，滚轮是 4、5 号键
 # 面板的列：键、表头、窄屏时藏掉的先后（0 = 一直显示）
-PANEL_COLUMNS = (("name", "名字", 0), ("kind", "种类", 5), ("instance", "实例", 2), ("state", "状态", 0),
-                 ("doing", "正在做", 0), ("quiet", "无输出", 6), ("attached", "接入", 0), ("source", "最近输入", 4),
-                 ("dir", "目录", 3), ("title", "标题", 1))
+PANEL_COLUMNS = (("name", "NAME", 0), ("kind", "KIND", 5), ("instance", "INST", 2), ("state", "STATE", 0),
+                 ("doing", "DOING", 0), ("quiet", "QUIET", 6), ("attached", "ATT", 0), ("source", "SOURCE", 4),
+                 ("dir", "DIR", 3), ("title", "TITLE", 1))
 DIM_COLUMNS = ("kind", "instance", "source", "dir", "title")
-MIN_WIDTHS = {"kind": 6, "instance": 6, "state": 8, "doing": 22}  # 取值范围固定或一直在变的列给够宽度，表格不跳
+LIST_MIN = 10          # 列表区最少占几行：不够就留白，不要被回复区挤掉，分隔线位置才稳定
+MIN_WIDTHS = {"kind": 6, "instance": 6, "state": 10, "doing": 22}  # 取值范围固定或一直在变的列给够宽度，表格不跳
 RIGHT_ALIGNED = ("quiet",)  # 数字右对齐，好比
 STATE_RANK = {"blocked": 0, "working": 2, "starting": 3, "idle": 5}  # 按状态排时的先后；疑似卡住排 1
 
@@ -82,7 +83,7 @@ def collect(prefix):
     if code != 0:
         return [{"name": None, "state": None, "attached": 0, "st": {}, "instance": None, "cwd": None,
                  "starting": False,
-                 "cells": ("(corral ls 失败)", "", "", listing.get("error", ""), "", "", "", "", "")}]
+                 "cells": ("(corral ls failed)", "", "", listing.get("error", ""), "", "", "", "", "")}]
     now = time.time()
     out = []
     for item in sorted(listing.get("agents", []), key=lambda i: i["name"]):
@@ -91,18 +92,18 @@ def collect(prefix):
             continue
         st = {}
         if item.get("starting"):
-            cells = (name, "", "", "(启动中)", "", "", "", "", "")
+            cells = (name, "", "", "(starting)", "", "", "", "", "")
         elif item.get("incompatible"):
-            cells = (name, "", "", f"(不兼容 proto {item.get('proto')})", "", "", "", "", "")
+            cells = (name, "", "", f"(incompatible proto {item.get('proto')})", "", "", "", "", "")
         else:
             code, st = corral("status", name)
             if code != 0:
-                cells, st = (name, item.get("kind") or "", "", f"(退出码 {code})", "", "", "", "", ""), {}
+                cells, st = (name, item.get("kind") or "", "", f"(exit {code})", "", "", "", "", ""), {}
             else:
                 doing = ""
                 if st.get("state") in ("working", "blocked"):
                     elapsed = secs(now - st["turn_started"]) if st.get("turn_started") else ""
-                    doing = f"{st.get('last_tool') or '思考/输出'} {elapsed}".strip()
+                    doing = f"{st.get('last_tool') or 'thinking'} {elapsed}".strip()
                 cells = (name, st.get("kind") or "", (st.get("instance") or "")[:6], st.get("state") or "", doing,
                          secs(st.get("idle_for")), str(st.get("attached", "")), st.get("last_input_source") or "",
                          cut(st.get("title") or "", 28))
@@ -125,9 +126,9 @@ def table_lines(records):
 
 def render(prefix):
     records = collect(prefix)
-    lines = [f"corral 看板  {time.strftime('%H:%M:%S')}"] + table_lines(records)
+    lines = [f"corral board  {time.strftime('%H:%M:%S')}"] + table_lines(records)
     if not records:
-        lines.append("（没有 agent）")
+        lines.append("(no agents)")
     return "\n".join(lines)
 
 
@@ -187,10 +188,10 @@ class Viewer:
 
     def draw_idle(self):
         """几段文字上下居中、左留 2 格：标题粗体，上一次的说明灰色，q 青色粗体。"""
-        paras = ["\x1b[1mcorral 显示器", "没有接入。在面板里选一个 agent，按回车或点它。"]
+        paras = ["\x1b[1mcorral viewer", "Not attached. Pick an agent in the panel: press enter or click it."]
         if self.note:
             paras.append("\x1b[90m" + self.note)
-        paras.append("\x1b[1;36mq\x1b[0m 退出")
+        paras.append("\x1b[1;36mq\x1b[0m quit")
         try:
             rows = os.get_terminal_size(sys.stdout.fileno()).lines
         except OSError:
@@ -238,15 +239,15 @@ class Viewer:
         self.set_showing(None)
         if nxt is None:
             code = proc.returncode
-            self.note = (f"已断开 {name}，它继续在跑" if code == 0 else f"{name} 已退出" if code == 2
-                         else f"接入 {name} 失败（退出码 {code}）")
+            self.note = (f"detached from {name}, it keeps running" if code == 0 else f"{name} exited" if code == 2
+                         else f"attach to {name} failed (exit {code})")
         return nxt
 
 
 def viewer():
     info = viewer_info()
     if info:
-        sys.stderr.write(f"已经有一个显示器在跑（pid {info['pid']}）\n")
+        sys.stderr.write(f"a viewer is already running (pid {info['pid']})\n")
         return 1
     v = Viewer()
     fd = sys.stdin.fileno()
@@ -291,10 +292,10 @@ def align(key, text, n):
 
 
 def fit_columns(widths, avail):
-    """窄屏时按先后藏掉次要列，返回要显示的列键。行首标记占 3 格，列之间空 2 格。"""
+    """窄屏时按先后藏掉次要列，返回要显示的列键。行首标记占 4 格，列之间空 2 格。"""
     keys = [k for k, _, _ in PANEL_COLUMNS]
     for _, k in sorted((p, k) for k, _, p in PANEL_COLUMNS if p):
-        if 3 + sum(widths[k] for k in keys) + 2 * (len(keys) - 1) <= avail:
+        if 4 + sum(widths[k] for k in keys) + 2 * (len(keys) - 1) <= avail:
             break
         keys.remove(k)
     return keys
@@ -397,17 +398,17 @@ class Panel:
                 if code == 0:
                     self.reply = (name, out.get("text") or "", False)
                 elif out.get("error") == "no_reply":
-                    self.reply = (name, "（还没有回复）", True)
+                    self.reply = (name, "(no reply yet)", True)
                 else:
-                    self.reply = (name, f"（取回复失败：{out.get('error') or code}）", True)
+                    self.reply = (name, f"(reply failed: {out.get('error') or code})", True)
             self.wake_reply.wait(self.every)
             self.wake_reply.clear()
 
     def stop(self, name):
         self.stopping.add(name)
-        self.message = f"正在关 {name}…"
+        self.message = f"stopping {name}…"
         code, out = corral("stop", name, timeout=120)
-        self.message = f"已关掉 {name}" if code == 0 else f"关 {name} 失败：{out.get('error') or code}"
+        self.message = f"stopped {name}" if code == 0 else f"stop {name} failed: {out.get('error') or code}"
         self.wake_table.set()
 
     def absorb(self, records):
@@ -435,7 +436,7 @@ class Panel:
         gone = [n for n in self.prev if n not in seen]
         exited = [n for n in gone if n not in self.stopping]
         if exited and not self.confirm:
-            self.message = "、".join(exited) + " 已退出"
+            self.message = ", ".join(exited) + " exited"
         for n in gone:
             self.new.discard(n)
             self.first_seen.pop(n, None)
@@ -493,7 +494,7 @@ class Panel:
         doing = ""
         if state in ("working", "blocked"):
             elapsed = secs(now - st["turn_started"]) if st.get("turn_started") else ""
-            doing = f"{st.get('last_tool') or '思考/输出'} {elapsed}".strip()
+            doing = f"{st.get('last_tool') or 'thinking'} {elapsed}".strip()
             if state == "working":
                 doing = SPIN[self.frame % len(SPIN)] + " " + doing
         return {"name": name, "kind": st.get("kind") or "", "instance": (st.get("instance") or "")[:6],
@@ -524,14 +525,14 @@ class Panel:
             return
         info = viewer_info()
         if not info:
-            self.message = "右格没有显示器：在旁边一格运行 tools/board --viewer"
+            self.message = "no viewer: run tools/board --viewer in the pane next to this one"
             return
         if info.get("showing") == name:
             return
         code, st = corral("status", name)  # 现查，不用表格里几秒前的接入数
         if code == 0 and st.get("attached"):
             # 后接入的窗口只读，画面尺寸又跟着先接入的窗口走，右格会乱；干脆不接
-            self.message = f"{name} 已在别处接入，先在那边按 Ctrl-] 断开"
+            self.message = f"{name} is attached elsewhere, press Ctrl-] there first"
             return
         write_json(channel("target"), {"name": name, "seq": time.time_ns()})
 
@@ -541,7 +542,7 @@ class Panel:
             if key in (ord("y"), ord("Y")):
                 threading.Thread(target=self.stop, args=(name,), daemon=True).start()
             else:
-                self.message = "已取消"
+                self.message = "cancelled"
             return
         self.message = ""
         if key in (curses.KEY_UP, ord("k")):
@@ -569,7 +570,7 @@ class Panel:
             self.by_state = not self.by_state
         elif key == ord("x") and self.selected:
             self.confirm = self.selected
-            self.message = f"关掉 {self.selected}？按 y 确认，其他键取消"
+            self.message = f"stop {self.selected}? y to confirm, any other key cancels"
 
     # 画：配色只用终端的标准色，背景跟随主题；256 色终端上三条横条（标题栏、回复标题、底栏）是灰底 238，选中行是深蓝底
 
@@ -612,17 +613,19 @@ class Panel:
         selected = name is not None and name == self.selected
         mark = self.marker(r, now)
         if selected and not curses.has_colors():
-            text = ("▶" if showing and name == showing else " ") + mark + " "
+            text = " " + ("▶" if showing and name == showing else " ") + mark + " "
             text += "  ".join(align(k, cells[k], widths[k]) for k in keys)
             return [(text, curses.A_REVERSE)], curses.A_REVERSE
-        fg, bg = (self.sel_fg, self.sel_bg) if selected else (-1, -1)
+        fg, bg = (self.sel_fg, self.sel_bg) if selected else (-1, self.list_bg)
         base = self.color(fg, bg)
-        dim = base if selected else self.color(extra=curses.A_DIM)  # 选中行不调暗
+        # 选中只靠左侧色条和一层更亮的底色，行内的语义色和调暗层次照旧（8 色终端下沿用整行反白）
+        dim = base if selected and not self.rich else self.color(fg, bg, curses.A_DIM)
         mark_attr = {"!": self.color(curses.COLOR_RED, bg, curses.A_BOLD),
                      "?": self.color(curses.COLOR_YELLOW, bg, curses.A_BOLD),
                      "●": self.color(curses.COLOR_CYAN, bg, curses.A_BOLD)}.get(mark, base)
         shown = showing and name == showing
-        segs = [("▶" if shown else " ", self.color(curses.COLOR_GREEN, bg) if shown else base),
+        segs = [("▎" if selected else " ", self.color(self.accent_fg, bg, curses.A_BOLD) if selected else base),
+                ("▶" if shown else " ", self.color(curses.COLOR_GREEN, bg) if shown else base),
                 (mark, mark_attr), (" ", base)]
         elsewhere = r["attached"] - (1 if shown else 0) > 0
         q = self.quiet(r, now) if state == "working" else None
@@ -635,8 +638,10 @@ class Panel:
                 continue
             if k == "name":
                 attr = self.color(fg, bg, curses.A_BOLD if state == "blocked" else 0)
-            elif k == "state":
+            elif k == "state":  # 状态前加一个色块：眼睛先落到颜色，再读字
                 attr = self.state_attr(state, bg, base if selected else None)
+                segs += [("● ", attr), (align(k, cells[k], widths[k] - 2), attr)]
+                continue
             elif k == "attached":
                 attr = self.color(curses.COLOR_MAGENTA, bg, curses.A_BOLD) if elsewhere else base
             elif k == "quiet":  # 在干活却没输出：越久越显眼；其余调暗
@@ -645,7 +650,7 @@ class Panel:
             else:
                 attr = dim if k in DIM_COLUMNS else base
             segs.append((text, attr))
-        return segs, base if selected else None
+        return segs, base
 
     def state_attr(self, state, bg, selected_attr=None):
         if state == "working":
@@ -683,19 +688,19 @@ class Panel:
         gray = self.gray()
         # 标题栏：只有产品名、警告是亮的，时钟、排序方式、「右格：」调暗；靠右，末尾留 1 格
         bar, dim_bar = self.bar, self.bar | curses.A_DIM
-        left = [(" corral 看板", bar | curses.A_BOLD), (f"  {time.strftime('%H:%M:%S')}", dim_bar)]
+        left = [(" corral board", bar), (f"  {time.strftime('%H:%M:%S')}", dim_bar)]
         if self.by_state:
-            left.append(("  按状态排", dim_bar))
+            left.append(("  by state", dim_bar))
         if showing or info:
-            right = [("右格：", dim_bar), (showing or "空闲", bar)]
+            right = [("viewer: ", dim_bar), (showing or "none", bar)]
         else:
-            right = [("右格没有显示器", self.color(curses.COLOR_YELLOW, self.bar_bg, curses.A_BOLD) | self.bar_extra)]
+            right = [("no viewer", self.color(curses.COLOR_YELLOW, self.bar_bg, curses.A_BOLD) | self.bar_extra)]
         gap = w - 1 - sum(width(t) for t, _ in left + right)
         self.line(scr, 0, left + [(" " * max(1, gap), bar)] + right, fill=bar)
         self.row_at = {}
         y = 1
         if records is None:
-            self.line(scr, y, [(" ", 0), ("读取中…", gray)])
+            self.line(scr, y, [(" ", 0), ("loading…", gray)])
             y += 1
         else:
             rows = self.view(now)
@@ -706,14 +711,15 @@ class Panel:
                       for k, head, _ in PANEL_COLUMNS}
             keys = fit_columns(widths, w - 1)
             heads = dict((k, head) for k, head, _ in PANEL_COLUMNS)
-            self.line(scr, y, [("   " + "  ".join(align(k, heads[k], widths[k]) for k in keys),
-                                self.gray(extra=curses.A_BOLD))])
+            list_fill = self.color(-1, self.list_bg)
+            self.line(scr, y, [("    " + "  ".join(align(k, heads[k], widths[k]) for k in keys),
+                                self.gray(self.list_bg, curses.A_BOLD))], fill=list_fill)
             y += 1
             if not records:
-                self.line(scr, y, [(" ", 0), ("（没有 agent）", gray)])
+                self.line(scr, y, [(" ", 0), ("(no agents)", gray)])
                 y += 1
             self.order = [r["rec"]["name"] for r in rows if "rec" in r and r["rec"]["name"]]
-            avail = max(1, min(len(rows), h - 9))  # 至少给回复留几行
+            avail = max(1, min(max(len(rows), LIST_MIN), h - 9))  # 至少 LIST_MIN 行，上限是给回复留几行
             at = [i for i, r in enumerate(rows) if "rec" in r and r["rec"]["name"] == self.selected]
             i = at[0] if at else 0
             self.top = min(max(self.top, i - avail + 1), i, max(0, len(rows) - avail))
@@ -724,23 +730,30 @@ class Panel:
                     if row["rec"]["name"]:
                         self.row_at[y] = row["rec"]["name"]
                 else:  # 分组小标题：组名青色，数量和一条横线灰色，画到倒数第 2 格
-                    label, count = row["group"] or "（无前缀）", f"（{row['count']}）"
+                    label, count = row["group"] or "(no prefix)", f" ({row['count']})"
                     rest = w - 1 - (width(label) + width(count) + 2)
-                    self.line(scr, y, [(" ", 0), (label, self.color(curses.COLOR_CYAN, extra=curses.A_BOLD)),
-                                       (count, gray), (" " + "─" * max(0, rest), gray)])
+                    self.line(scr, y, [(" ", list_fill),
+                                       (label, self.color(curses.COLOR_CYAN, self.list_bg, curses.A_BOLD)),
+                                       (count, self.gray(self.list_bg)),
+                                       (" " + "─" * max(0, rest), self.gray(self.list_bg))], fill=list_fill)
+                y += 1
+            for _ in range(avail - len(rows[self.top:self.top + avail])):  # 行不够就留白，底色照铺
+                self.line(scr, y, [], fill=list_fill)
                 y += 1
         # 回复区：标题做成和标题栏一样的整行横条，把屏幕分成列表、回复上下两块；正文左留 1 格、右留 1 格给滚动条
         name, text, note = self.reply
         if self.selected:
-            head = [(" ", bar), (self.selected, bar | curses.A_BOLD), (" · 上一轮回复", dim_bar)]
+            accent_bar = self.color(self.accent_fg, self.bar_bg) | self.bar_extra
+            head = [(" ", bar), ("▎", accent_bar), (self.selected, accent_bar | curses.A_BOLD),
+                    (" · last reply", dim_bar)]
         else:
-            head = [(" 上一轮回复", dim_bar)]
+            head = [(" last reply", dim_bar)]
         self.line(scr, y, head, fill=bar)
         y += 1
         if not self.selected:
-            body = [[("（还没有回复）", "note")]]
+            body = [[("(no reply yet)", "note")]]
         elif name != self.selected:
-            body = [[("读取中…", "note")]]
+            body = [[("loading…", "note")]]
         elif note:
             body = [[(text, "note")]]
         else:
@@ -782,7 +795,10 @@ class Panel:
         rich = curses.has_colors() and curses.COLORS >= 256
         self.gray_fg = 8 if curses.has_colors() and curses.COLORS >= 16 else -1
         self.bar_bg, self.bar_extra = (238, 0) if rich else (-1, curses.A_REVERSE)  # 238 在深色底上比 236 显眼
-        self.sel_fg, self.sel_bg = (15, 24) if rich else (curses.COLOR_WHITE, curses.COLOR_BLUE)
+        self.rich = rich
+        self.list_bg = 235 if rich else -1            # 列表区整体一层淡底，和纯黑的回复区分成两块面板
+        self.accent_fg = 39 if rich else curses.COLOR_CYAN   # 强调色：串起「选中的行」和「它的回复」
+        self.sel_fg, self.sel_bg = (-1, 237) if rich else (curses.COLOR_WHITE, curses.COLOR_BLUE)
         self.bar = self.color(7 if rich else -1, self.bar_bg) | self.bar_extra
         curses.mousemask(curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED | WHEEL_UP | WHEEL_DOWN)
         curses.mouseinterval(0)
@@ -806,14 +822,14 @@ class Panel:
 
 
 def main():
-    ap = argparse.ArgumentParser(prog="board", description="实时列出所有 corral agent 的状态，选中一个让旁边一格显示它")
-    ap.add_argument("--every", type=float, default=3.0, help="刷新间隔秒数，默认 3")
-    ap.add_argument("--once", action="store_true", help="只打印一次状态表")
-    ap.add_argument("--prefix", help="只看名字以它开头的 agent，如 demo/")
-    ap.add_argument("--viewer", action="store_true", help="作为显示器运行，放在面板旁边一格")
-    ap.add_argument("--bell", action="store_true", help="agent 做完一轮或卡住时终端响一声")
-    ap.add_argument("--stuck-start", type=float, default=60.0, help="启动超过这么多秒标疑似卡住，默认 60")
-    ap.add_argument("--stuck-quiet", type=float, default=120.0, help="在干活却这么多秒没输出标疑似卡住，默认 120")
+    ap = argparse.ArgumentParser(prog="board", description="Live list of every corral agent; pick one and the pane next to it shows that agent")
+    ap.add_argument("--every", type=float, default=3.0, help="refresh interval in seconds (default 3)")
+    ap.add_argument("--once", action="store_true", help="print the table once and exit")
+    ap.add_argument("--prefix", help="only agents whose name starts with this, e.g. demo/")
+    ap.add_argument("--viewer", action="store_true", help="run as the viewer, in the pane next to the panel")
+    ap.add_argument("--bell", action="store_true", help="beep when an agent finishes a turn or looks stuck")
+    ap.add_argument("--stuck-start", type=float, default=60.0, help="flag as possibly stuck after this many seconds starting (default 60)")
+    ap.add_argument("--stuck-quiet", type=float, default=120.0, help="flag as possibly stuck after this many seconds working with no output (default 120)")
     args = ap.parse_args()
     if args.once:
         print(render(args.prefix))
