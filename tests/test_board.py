@@ -33,7 +33,7 @@ class BoardTest(AgentTestCase):
         return lines[0]
 
     def test_no_agents(self):
-        self.assertIn("（没有 agent）", self.board())
+        self.assertIn("(no agents)", self.board())
 
     def test_lists_agents_with_state_and_current_tool(self):
         self.start("demo/idle", "claude")
@@ -41,7 +41,7 @@ class BoardTest(AgentTestCase):
         self.start("demo/busy", "claude", script=["tool:5"])
         self.states_until("demo/busy", lambda s: s.get("last_tool") == "Bash")
         out = self.board()
-        for header in ("名字", "种类", "状态", "正在做", "接入", "最近输入"):
+        for header in ("NAME", "KIND", "STATE", "DOING", "ATT", "SOURCE"):
             self.assertIn(header, out.splitlines()[1])
         idle = self.row(out, "demo/idle")
         self.assertIn("claude", idle)
@@ -124,9 +124,9 @@ class PanelTest(AgentTestCase):
     def test_enter_shows_selected_agent_in_viewer_and_switches(self):
         self.idle_agents("demo/a", "demo/b")
         viewer = self.open("--viewer")
-        self.assertTrue(self.seen(viewer, "没有接入"))
+        self.assertTrue(self.seen(viewer, "Not attached"))
         panel = self.open()
-        self.assertTrue(self.seen(panel, "（2）"))
+        self.assertTrue(self.seen(panel, " (2)"))
         panel.type(b"\r")
         self.assertTrue(self.attached("demo/a", 1))
         viewer.type(b"reply:via-viewer\r")  # 在显示器里打的字送到了 demo/a
@@ -139,7 +139,7 @@ class PanelTest(AgentTestCase):
         self.assertIn(b"\x1b[?2004l", viewer.output[mark:])  # 换人时 attach 自己还原了 agent 打开的终端模式
         viewer.type(b"\x1d")  # Ctrl-] 断开，回到空闲画面
         self.assertTrue(self.attached("demo/b", 0))
-        self.assertTrue(self.seen(viewer, "已断开 demo/b"))
+        self.assertTrue(self.seen(viewer, "detached from demo/b"))
         for name in ("demo/a", "demo/b"):
             self.assertEqual(self.status(name).get("state"), "idle")  # 换人、断开都不影响 agent
 
@@ -147,8 +147,8 @@ class PanelTest(AgentTestCase):
         self.idle_agents("demo/a", "demo/b")
         self.open("--viewer")
         panel = self.open()
-        self.assertTrue(self.seen(panel, "（2）"))
-        y = 5  # 第 1 行标题、第 2 行表头、第 3 行分组小标题、第 4 行 demo/a、第 5 行 demo/b（从 1 数）
+        self.assertTrue(self.seen(panel, " (2)"))
+        y = 6  # 第 1 行标题、第 2 行框的上边、第 3 行表头、第 4 行分组小标题、第 5 行 demo/a、第 6 行 demo/b（从 1 数）
         if re.search(rb"\x1b\[\?[\d;]*1006[\d;]*h", panel.output):  # 面板开了 SGR 格式的鼠标上报
             panel.type(f"\x1b[<0;5;{y}M\x1b[<0;5;{y}m".encode())
         else:
@@ -160,20 +160,20 @@ class PanelTest(AgentTestCase):
         self.idle_agents("demo/a")
         viewer = self.open("--viewer")
         panel = self.open()
-        self.assertTrue(self.seen(panel, "（1）"))
+        self.assertTrue(self.seen(panel, " (1)"))
         panel.type(b"\r")
         self.assertTrue(self.attached("demo/a", 1))
         self.assertEqual(self.cli("stop", "demo/a")[0], 0)
-        self.assertTrue(self.seen(viewer, "demo/a 已退出"))
+        self.assertTrue(self.seen(viewer, "demo/a exited"))
 
     def test_x_asks_and_only_y_stops(self):
         self.idle_agents("demo/a")
         panel = self.open()
-        self.assertTrue(self.seen(panel, "（1）"))
+        self.assertTrue(self.seen(panel, " (1)"))
         panel.type(b"x")
-        self.assertTrue(self.seen(panel, "按 y 确认"))
+        self.assertTrue(self.seen(panel, "y to confirm"))
         panel.type(b"n")
-        self.assertTrue(self.seen(panel, "已取消"))
+        self.assertTrue(self.seen(panel, "cancelled"))
         self.assertEqual(self.cli("status", "demo/a")[0], 0)
         panel.type(b"x")
         panel.type(b"y")
@@ -204,8 +204,8 @@ class PanelTest(AgentTestCase):
         self.until(lambda: False, timeout=0.5)
         self.assertNotIn(b"END", panel.output)  # 回复比回复区长，末尾还没露出来
         wheel_down = "\x1b[<65;10;{}M"  # SGR 格式的滚轮向下，x=10，y 从 1 数
-        panel.type(wheel_down.format(4).encode() * 3)  # 第 4 行是 demo/a 这一行：只滚动，不接入
-        panel.type(wheel_down.format(15).encode() * 5)  # 回复区里
+        panel.type(wheel_down.format(5).encode() * 3)  # 第 5 行是 demo/a 这一行：只滚动，不接入
+        panel.type(wheel_down.format(15).encode() * 20)  # 回复区里：一格滚一行，滚过头也只停在末尾
         self.assertTrue(self.seen(panel, "END"))
         self.assertEqual(self.status("demo/a").get("attached"), 0)
 
@@ -217,9 +217,9 @@ class PanelTest(AgentTestCase):
         self.assertTrue(self.attached("demo/a", 1))
         viewer = self.open("--viewer")
         panel = self.open()
-        self.assertTrue(self.seen(panel, "（1）"))
+        self.assertTrue(self.seen(panel, " (1)"))
         panel.type(b"\r")
-        self.assertTrue(self.seen(panel, "已在别处接入"))
+        self.assertTrue(self.seen(panel, "attached elsewhere"))
         self.until(lambda: False, timeout=1.0)
         self.assertEqual(self.status("demo/a").get("attached"), 1)  # 右格没有接进去，不会只读乱显示
         self.assertNotIn(b"[corral]", viewer.output)
@@ -227,7 +227,7 @@ class PanelTest(AgentTestCase):
     def test_enter_without_viewer_tells_how_to_start_one(self):
         self.idle_agents("demo/a")
         panel = self.open()
-        self.assertTrue(self.seen(panel, "（1）"))
+        self.assertTrue(self.seen(panel, " (1)"))
         panel.type(b"\r")
         self.assertTrue(self.seen(panel, "tools/board --viewer"))
         self.assertEqual(self.status("demo/a").get("attached"), 0)
@@ -239,24 +239,24 @@ class PanelTest(AgentTestCase):
         with open(os.path.join(chan, "target"), "w") as f:
             json.dump({"name": "demo/a", "seq": 1}, f)
         viewer = self.open("--viewer")
-        self.assertTrue(self.seen(viewer, "没有接入"))
+        self.assertTrue(self.seen(viewer, "Not attached"))
         self.until(lambda: False, timeout=1.0)
         self.assertEqual(self.status("demo/a").get("attached"), 0)
 
     def test_groups_and_marks_turn_that_just_finished(self):
         self.idle_agents("demo/a", "demo/b")
         panel = self.open()
-        self.assertTrue(self.seen(panel, "（2）"))
+        self.assertTrue(self.seen(panel, " (2)"))
         self.assertEqual(self.cli("send", "demo/b", "reply:done")[0], 0)  # 光标在 demo/a 上，demo/b 做完一轮
         self.assertTrue(self.seen(panel, "●"))
 
     def test_only_one_viewer_and_q_quits(self):
         first = self.open("--viewer")
-        self.assertTrue(self.seen(first, "没有接入"))
+        self.assertTrue(self.seen(first, "Not attached"))
         second = self.open("--viewer")
         self.assertTrue(second.exited())
         self.assertNotEqual(second.exit_code, 0)
-        self.assertIn("已经有一个显示器".encode(), second.output)
+        self.assertIn(b"a viewer is already running", second.output)
         first.type(b"q")
         self.assertTrue(first.exited())
         self.assertEqual(first.exit_code, 0)
@@ -345,7 +345,7 @@ class PanelLogicTest(unittest.TestCase):
         p = self.panel()
         p.absorb([rec("demo/a", "working"), rec("demo/b")])
         p.absorb([rec("demo/a", "working")])
-        self.assertIn("demo/b 已退出", p.message)
+        self.assertIn("demo/b exited", p.message)
         p.absorb([rec("demo/a", "idle", instance="i2")])  # 同名重开，是另一个实例
         self.assertEqual(p.new, set())
 
@@ -420,10 +420,11 @@ class PanelLogicTest(unittest.TestCase):
         wide, narrow = Screen(20, 100), Screen(20, 60)
         p.draw(wide, None)
         p.draw(narrow, None)
-        right = {row[-1] for row in wide.g[5:19]}
-        self.assertEqual(right, {"░", "█"})  # 回复放不下：最右一列是滚动条
-        self.assertIn("回车/点击 在右格显示", "".join(wide.g[19]))
-        self.assertIn("回车 显示", "".join(narrow.g[19]))  # 不足 80 列换短提示
+        top = next(i for i, row in enumerate(wide.g) if row[0] == "├") + 1  # 回复区从分节线下一行到框的下边
+        right = {row[-2] for row in wide.g[top:-2]}
+        self.assertEqual(right, {"░", "█"})  # 回复放不下：边框里侧那一列是滚动条
+        self.assertIn("enter/click show in viewer", "".join(wide.g[19]))
+        self.assertIn("enter show", "".join(narrow.g[19]))  # 不足 80 列换短提示
 
     def test_spinner_turns_on_working_rows(self):
         p = self.panel()

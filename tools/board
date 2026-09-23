@@ -583,10 +583,6 @@ class Panel:
             self.pairs[(fg, bg)] = curses.color_pair(n)
         return self.pairs[(fg, bg)] | extra
 
-    def hue(self, c):
-        """语义色取亮色那一档（8–15，跟着终端主题走）。框里的底色比主题还暗，标准色 0–7 在上面发灰。"""
-        return c + 8 if self.rich else c
-
     def gray(self, bg=-1, extra=0):
         return self.color(self.gray_fg, bg, extra if self.gray_fg != -1 else extra | curses.A_DIM)
 
@@ -658,16 +654,16 @@ class Panel:
             text = " " + ("▶" if showing and name == showing else " ") + mark + " "
             text += "  ".join(align(k, cells[k], widths[k]) for k in keys)
             return [(text, curses.A_REVERSE)], curses.A_REVERSE
-        fg, bg = (self.sel_fg, self.sel_bg) if selected else (-1, self.box_bg)
+        fg, bg = (self.sel_fg, self.sel_bg) if selected else (-1, -1)
         base = self.color(fg, bg)
         # 选中只靠左侧色条和一层更亮的底色，行内的语义色和调暗层次照旧（8 色终端下沿用整行反白）
         dim = base if selected and not self.rich else self.color(fg, bg, curses.A_DIM)
-        mark_attr = {"!": self.color(self.hue(curses.COLOR_RED), bg, curses.A_BOLD),
-                     "?": self.color(self.hue(curses.COLOR_YELLOW), bg, curses.A_BOLD),
-                     "●": self.color(self.hue(curses.COLOR_CYAN), bg, curses.A_BOLD)}.get(mark, base)
+        mark_attr = {"!": self.color(curses.COLOR_RED, bg, curses.A_BOLD),
+                     "?": self.color(curses.COLOR_YELLOW, bg, curses.A_BOLD),
+                     "●": self.color(curses.COLOR_CYAN, bg, curses.A_BOLD)}.get(mark, base)
         shown = showing and name == showing
         segs = [("▎" if selected else " ", self.color(self.accent_fg, bg, curses.A_BOLD) if selected else base),
-                ("▶" if shown else " ", self.color(self.hue(curses.COLOR_GREEN), bg) if shown else base),
+                ("▶" if shown else " ", self.color(curses.COLOR_GREEN, bg) if shown else base),
                 (mark, mark_attr), (" ", base)]
         elsewhere = r["attached"] - (1 if shown else 0) > 0
         q = self.quiet(r, now) if state == "working" else None
@@ -676,7 +672,7 @@ class Panel:
                 segs.append(("  ", base))
             text = align(k, cells[k], widths[k])
             if k == "doing" and text[:1] and text[0] in SPIN:  # 转圈单独上色
-                segs += [(text[:2], self.color(self.hue(curses.COLOR_YELLOW), bg)), (text[2:], base)]
+                segs += [(text[:2], self.color(curses.COLOR_YELLOW, bg)), (text[2:], base)]
                 continue
             if k == "name":
                 attr = self.color(fg, bg, curses.A_BOLD if state == "blocked" else 0)
@@ -685,10 +681,10 @@ class Panel:
                 segs += [("● ", attr), (align(k, cells[k], widths[k] - 2), attr)]
                 continue
             elif k == "attached":
-                attr = self.color(self.hue(curses.COLOR_MAGENTA), bg, curses.A_BOLD) if elsewhere else base
+                attr = self.color(curses.COLOR_MAGENTA, bg, curses.A_BOLD) if elsewhere else base
             elif k == "quiet":  # 在干活却没输出：越久越显眼；其余调暗
-                attr = (self.color(self.hue(curses.COLOR_RED), bg, curses.A_BOLD) if q is not None and q >= self.stuck_quiet
-                        else self.color(self.hue(curses.COLOR_YELLOW), bg) if q is not None and q >= 30 else dim)
+                attr = (self.color(curses.COLOR_RED, bg, curses.A_BOLD) if q is not None and q >= self.stuck_quiet
+                        else self.color(curses.COLOR_YELLOW, bg) if q is not None and q >= 30 else dim)
             else:
                 attr = dim if k in DIM_COLUMNS else base
             segs.append((text, attr))
@@ -696,18 +692,18 @@ class Panel:
 
     def state_attr(self, state, bg, selected_attr=None):
         if state == "working":
-            return self.color(self.hue(curses.COLOR_YELLOW), bg)
+            return self.color(curses.COLOR_YELLOW, bg)
         if state == "blocked":
-            return self.color(self.hue(curses.COLOR_RED), bg, curses.A_BOLD)
+            return self.color(curses.COLOR_RED, bg, curses.A_BOLD)
         if state == "idle":
-            return self.color(self.hue(curses.COLOR_GREEN), bg)
+            return self.color(curses.COLOR_GREEN, bg)
         return selected_attr or self.gray(bg)  # starting、exiting、查不到的；选中行跟着行的字色
 
     def style(self, name, bg=-1):
         """回复区样式对应的属性。bg 是这一块的底色，正文也要跟着铺，不然文字是透明底、和四周不一样。"""
-        return {"head": self.color(self.hue(curses.COLOR_CYAN), bg, curses.A_BOLD),
-                "bullet": self.color(self.hue(curses.COLOR_CYAN), bg),
-                "code": self.color(self.hue(curses.COLOR_YELLOW), bg),
+        return {"head": self.color(curses.COLOR_CYAN, bg, curses.A_BOLD),
+                "bullet": self.color(curses.COLOR_CYAN, bg),
+                "code": self.color(curses.COLOR_YELLOW, bg),
                 "rule": self.gray(bg), "note": self.gray(bg),
                 "bold": self.color(-1, bg, curses.A_BOLD)}.get(name, self.color(-1, bg))
 
@@ -744,7 +740,7 @@ class Panel:
         self.row_at = {}
         # 列表和回复装在同一个圆角框里，中间用带标签的横线分节；框外只留顶栏和底栏当外壳
         edge = self.gray()
-        box_fill = self.color(-1, self.box_bg)
+        box_fill = self.color(-1, -1)
         y = 1
         n_agents = len(records) if records else 0
         title = self.color(-1, -1, curses.A_BOLD)                 # 两条边上的标题用同一套：主词亮白加粗，细节灰
@@ -752,7 +748,7 @@ class Panel:
                   ([(f" · {n_agents}", edge)] if records else []))
         y += 1
         if records is None:
-            self.line(scr, y, [("loading…", self.gray(self.box_bg))], fill=box_fill, box=edge)
+            self.line(scr, y, [("loading…", self.gray())], fill=box_fill, box=edge)
             y += 1
         else:
             rows = self.view(now)
@@ -765,7 +761,7 @@ class Panel:
             heads = dict((k, head) for k, head, _ in PANEL_COLUMNS)
             list_fill = box_fill
             self.line(scr, y, [("   " + "  ".join(align(k, heads[k], widths[k]) for k in keys),
-                                self.gray(self.box_bg, curses.A_BOLD))], fill=list_fill, box=edge)
+                                self.gray(-1, curses.A_BOLD))], fill=list_fill, box=edge)
             y += 1
             if not records:
                 self.line(scr, y, [("(no agents)", gray)], fill=list_fill, box=edge)
@@ -784,9 +780,9 @@ class Panel:
                 else:  # 分组小标题：组名青色，数量和一条横线灰色，画到倒数第 2 格
                     label, count = row["group"] or "(no prefix)", f" ({row['count']})"
                     rest = w - 4 - (width(label) + width(count) + 1)
-                    self.line(scr, y, [(label, self.color(self.hue(curses.COLOR_CYAN), self.box_bg, curses.A_BOLD)),
-                                       (count, self.gray(self.box_bg)),
-                                       (" " + "─" * max(0, rest), self.gray(self.box_bg))],
+                    self.line(scr, y, [(label, self.color(curses.COLOR_CYAN, -1, curses.A_BOLD)),
+                                       (count, self.gray()),
+                                       (" " + "─" * max(0, rest), self.gray())],
                               fill=list_fill, box=edge)
                 y += 1
             for _ in range(avail - len(rows[self.top:self.top + avail])):  # 行不够就留白，底色照铺
@@ -814,7 +810,7 @@ class Panel:
         self.reply_y = y
         self.reply_top = max(0, min(self.reply_top, len(body) - avail))
         for segs in body[self.reply_top:self.reply_top + avail]:
-            self.line(scr, y, [(t, self.style(s, self.box_bg)) for t, s in segs], fill=box_fill, box=edge)
+            self.line(scr, y, [(t, self.style(s)) for t, s in segs], fill=box_fill, box=edge)
             y += 1
         for _ in range(max(0, avail - len(body[self.reply_top:self.reply_top + avail]))):
             self.line(scr, y, [], fill=box_fill, box=edge)
@@ -851,7 +847,6 @@ class Panel:
         self.gray_fg = 8 if curses.has_colors() and curses.COLORS >= 16 else -1
         self.bar_bg, self.bar_extra = (238, 0) if rich else (-1, curses.A_REVERSE)  # 238 在深色底上比 236 显眼
         self.rich = rich
-        self.box_bg = 233 if rich else -1             # 框里的底色：比终端主题底色暗一档，整个框像往下凹的一口井
         self.accent_fg = 39 if rich else curses.COLOR_CYAN   # 强调色：串起「选中的行」和「它的回复」
         self.sel_fg, self.sel_bg = (-1, 237) if rich else (curses.COLOR_WHITE, curses.COLOR_BLUE)
         self.bar = self.color(7 if rich else -1, self.bar_bg) | self.bar_extra
