@@ -474,6 +474,36 @@ class PanelLogicTest(unittest.TestCase):
             else:  # 宽屏仍是单行表格
                 self.assertEqual(end - at, 1)
 
+    def test_long_list_has_scrollbar_wheel_and_offscreen_hints(self):
+        Screen = self.screen_class()
+        p = self.drawable_panel()
+        records = [rec(f"demo/a{i}") for i in range(8)]
+        records[7] = rec("demo/a7", "blocked")
+        p.absorb(records)
+        p.selected = "demo/a0"
+        board = self.board
+
+        def drawn():
+            screen = Screen(16, 52)
+            p.draw(screen, None)
+            return screen, ["".join(row) for row in screen.g]
+
+        screen, lines = drawn()
+        bottom = next(line for line in lines if line.startswith("╰"))
+        self.assertIn("↓", bottom)
+        self.assertIn("! 1", bottom)  # 下面藏着一个卡住的
+        self.assertNotIn("↑", lines[1])
+        bar = {row[-2] for row in screen.g[3:len(lines) - 2]}
+        self.assertEqual(bar, {"░", "█"})  # 列表放不下：框里侧那一列是滚动条
+        wheel = (0, 10, 8, 0, board.WHEEL_DOWN)
+        self.addCleanup(setattr, board.curses, "getmouse", board.curses.getmouse)
+        board.curses.getmouse = lambda: wheel
+        for _ in range(6):
+            p.handle(board.curses.KEY_MOUSE, 5)
+        screen, lines = drawn()
+        self.assertIn("↑", lines[1])  # 滚下去之后，上面藏住的写在框顶
+        self.assertEqual(p.selected, "demo/a0")  # 滚轮只滚，不换选中的
+
     def test_r_toggles_reply_section(self):
         Screen = self.screen_class()
         p = self.drawable_panel()

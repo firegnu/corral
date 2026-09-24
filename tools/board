@@ -459,6 +459,9 @@ class Panel:
         self.ring = False  # 该响铃了
         self.row_at = {}  # 屏幕行号 -> 名字，给鼠标点击用
         self.reply_y = None  # 回复正文从第几行开始，给滚轮用
+        self.list_rows = None  # 列表正文占的屏幕行 (起, 止)，给滚轮用
+        self.follow = True  # 列表跟着选中的走；滚轮滚过之后不跟，直到再选一个
+        self.below = None  # 列表下面藏住的提示，画到列表的下边界上
         self.pairs = {}  # (前景, 背景) -> curses 颜色对
         self.wake_table = threading.Event()
         self.wake_reply = threading.Event()
@@ -590,6 +593,7 @@ class Panel:
 
     def select(self, name):
         self.new.discard(name)
+        self.follow = True
         if name != self.selected:
             self.selected, self.reply_top = name, 0
             self.wake_reply.set()
@@ -637,9 +641,12 @@ class Panel:
                 _, _, y, _, button = curses.getmouse()
             except curses.error:
                 return
-            if button & (WHEEL_UP | WHEEL_DOWN):  # 滚轮只滚回复，不选行
+            if button & (WHEEL_UP | WHEEL_DOWN):  # 滚轮只滚，不选行：在回复上滚回复，在列表上滚列表
+                step = -1 if button & WHEEL_UP else 1
                 if self.show_reply and self.reply_y is not None and y >= self.reply_y:
-                    self.reply_top = max(0, self.reply_top + (-1 if button & WHEEL_UP else 1))
+                    self.reply_top = max(0, self.reply_top + step)
+                elif self.list_rows and self.list_rows[0] <= y < self.list_rows[1]:
+                    self.top, self.follow = max(0, self.top + step), False
             elif y in self.row_at:
                 self.select(self.row_at[y])
                 self.show_in_viewer()
@@ -710,8 +717,8 @@ class Panel:
             except curses.error:
                 pass
 
-    def rule(self, scr, y, ends, label=None):
-        """框的横边：ends 是两端的角字符，label 嵌在线里（`╭─ 标签 ────╮`）。accent 给标签里要高亮的那段。"""
+    def rule(self, scr, y, ends, label=None, right=None):
+        """框的横边：ends 是两端的角字符，label 嵌在线里（`╭─ 标签 ────╮`），right 靠右（`──── ↓ 3 ─╮`）。"""
         box = self.gray()
         segs = [(ends[0] + "─", box)]
         used = 2
@@ -724,8 +731,9 @@ class Panel:
             segs.append((" ", box))
             used += 1
         h, w = scr.getmaxyx()
-        segs.append(("─" * max(0, w - 1 - used), box))
-        self.line(scr, y, segs)
+        tail = [(" ", box)] + right + [(" ─", box)] if right else []
+        segs.append(("─" * max(0, w - 1 - used - sum(width(t) for t, _ in tail)), box))
+        self.line(scr, y, segs + tail)
         try:
             scr.insstr(y, w - 1, ends[1], box)
         except curses.error:
@@ -797,6 +805,15 @@ class Panel:
         return [("▎" if selected else " ", self.color(self.accent_fg, bg, curses.A_BOLD) if selected else base),
                 ("   ", base), ("╰ " if last else "│ ", self.gray(bg))] + [(t, attrs[k]) for t, k in parts if t], base
 
+    def hidden_hint(self, recs, arrow, now):
+        """框边上的屏幕外提示：`↓ 3 · ! 1 · ● 1`。数量灰色；卡住、疑似卡住、做完没看的分别计数，颜色同行首标记。"""
+        segs = [(f"{arrow} {len(recs)}", self.gray())]
+        for mark, fg in (("!", curses.COLOR_RED), ("?", curses.COLOR_YELLOW), ("●", curses.COLOR_CYAN)):
+            n = sum(self.marker(r, now) == mark for r in recs.values())
+            if n:
+                segs += [(" · ", self.gray()), (f"{mark} {n}", self.color(fg, -1, curses.A_BOLD))]
+        return segs
+
     def state_attr(self, state, bg, selected_attr=None):
         if state == "working":
             return self.color(curses.COLOR_YELLOW, bg)
@@ -857,6 +874,7 @@ class Panel:
         if records is None:
             self.line(scr, y, [("loading…", self.gray())], fill=box_fill, box=edge)
             y += 1
+            self.below = None
         else:
             rows = self.view(now)
             for row in rows:
@@ -895,8 +913,28 @@ class Panel:
             at = [i for i, r in enumerate(rows) if "rec" in r and r["rec"]["name"] == self.selected]
             i = at[0] if at else 0
             last = at[-1] if at else 0  # 折行排法时选中 agent 的几行都要露出来
-            self.top = min(max(self.top, last - avail + 1), i, max(0, len(rows) - avail))
-            for row in rows[self.top:self.top + avail]:
+            if self.follow:
+                self.top = min(max(self.top, last - avail + 1), i)
+            self.top = max(0, min(self.top, len(rows) - avail))
+            view = rows[self.top:self.top + avail]
+            self.list_rows = (y, y + avail)
+            if len(rows) > avail:  # 放不下时框里侧最右一列画滚动条，同回复区：░ 轨道，█ 滑块
+                n = max(1, round(avail * avail / len(rows)))
+                top = min(avail - n, round(self.top * avail / len(rows)))
+                for k in range(avail):
+                    try:
+                        scr.addstr(y + k, w - 2, "█" if top <= k < top + n else "░", gray)
+                    except curses.error:
+                        pass
+            # 名字那一行露出来才算看得见；上面、下面藏住的写在框的边上，要处理的按标记分别计数
+            seen = {r["rec"]["name"] for r in view if "rec" in r and "identity" not in r}
+            above = {r["rec"]["name"]: r["rec"] for r in rows[:self.top] if "rec" in r and r["rec"]["name"] not in seen}
+            below = {r["rec"]["name"]: r["rec"] for r in rows[self.top + avail:]
+                     if "rec" in r and r["rec"]["name"] not in seen}
+            if above:
+                self.rule(scr, 1, "╭╮", [("agents", title), (f" · {n_agents}", edge)], self.hidden_hint(above, "↑", now))
+            self.below = self.hidden_hint(below, "↓", now) if below else None
+            for row in view:
                 if "rec" in row:
                     segs, fill = (self.identity_segs(row["rec"], row["identity"], showing, row["last"]) if "identity" in row
                                   else self.row_segs(row["rec"], row["cells"], keys, widths, showing, now))
@@ -913,7 +951,7 @@ class Panel:
                 else:  # 分组之间的空行
                     self.line(scr, y, [], fill=list_fill, box=edge)
                 y += 1
-            for _ in range(avail - len(rows[self.top:self.top + avail])):  # 行不够就留白，底色照铺
+            for _ in range(avail - len(view)):  # 行不够就留白，底色照铺
                 self.line(scr, y, [], fill=list_fill, box=edge)
                 y += 1
         if not self.show_reply:  # 回复区隐藏：框里剩下的行留白
@@ -928,7 +966,7 @@ class Panel:
                 label = [(self.selected, title), (" · last reply", edge)]
             else:
                 label = [("last reply", title)]
-            self.rule(scr, y, "├┤", label)
+            self.rule(scr, y, "├┤", label, self.below)
             y += 1
             if not self.selected:
                 body = [[("(no reply yet)", "note")]]
@@ -957,7 +995,7 @@ class Panel:
                         scr.addstr(self.reply_y + i, w - 2, "█" if top <= i < top + n else "░", gray)
                     except curses.error:
                         pass
-        self.rule(scr, y, "╰╯")
+        self.rule(scr, y, "╰╯", right=None if self.show_reply else self.below)
         y += 1
         # 底栏：按键名青色，键名后空 1 格、项间空 2 格；不足 80 列用短提示；有消息时换成消息
         if self.message:
