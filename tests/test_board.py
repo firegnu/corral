@@ -469,10 +469,11 @@ class PanelLogicTest(unittest.TestCase):
                 self.assertGreater(end - at, 1)
                 self.assertIn(title, block)
                 self.assertIn("attached 1", block)
-                self.assertFalse(any("KIND" in line for line in lines))
+                self.assertFalse(any("KIND" in line or "NAME" in line for line in lines))  # 折行时不要表头行
                 self.assertNotIn("attached", " ".join(lines[end:end + 3]))
-            else:  # 宽屏仍是单行表格
+            else:  # 宽屏仍是单行表格，表头照旧
                 self.assertEqual(end - at, 1)
+                self.assertTrue(any("NAME" in line and "KIND" in line for line in lines))
 
     def test_long_list_has_scrollbar_wheel_and_offscreen_hints(self):
         Screen = self.screen_class()

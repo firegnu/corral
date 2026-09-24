@@ -888,11 +888,10 @@ class Panel:
                 keys, widths = LINE1, line1_widths(widths, w - 3)
             heads = dict((k, head) for k, head, _ in PANEL_COLUMNS)
             list_fill = box_fill
-            if widths.get("doing_below"):
-                heads["doing"] = ""
-            self.line(scr, y, [("    " + "".join(col_gap(keys, i) + align(k, heads[k], widths[k]) for i, k in enumerate(keys)),
-                                self.gray())], fill=list_fill, box=edge)
-            y += 1
+            if not two:  # 表头只给单行表格：折行时名字、状态一看就懂，下面几行自带说明，省下一行
+                self.line(scr, y, [("    " + "".join(col_gap(keys, i) + align(k, heads[k], widths[k]) for i, k in enumerate(keys)),
+                                    self.gray())], fill=list_fill, box=edge)
+                y += 1
             if not records:
                 self.line(scr, y, [("(no agents)", gray)], fill=list_fill, box=edge)
                 y += 1
