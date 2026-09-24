@@ -428,14 +428,17 @@ class PanelLogicTest(unittest.TestCase):
         p.absorb([rec("demo/a")])
         p.selected = "demo/a"
         p.reply = ("demo/a", "\n".join(f"第 {i} 行" for i in range(60)), False)
-        wide, narrow = Screen(20, 100), Screen(20, 60)
+        wide, mid, narrow = Screen(20, 100), Screen(20, 70), Screen(20, 60)
         p.draw(wide, None)
+        p.draw(mid, None)
         p.draw(narrow, None)
         top = next(i for i, row in enumerate(wide.g) if row[0] == "├") + 1  # 回复区从分节线下一行到框的下边
         right = {row[-2] for row in wide.g[top:-2]}
         self.assertEqual(right, {"░", "█"})  # 回复放不下：边框里侧那一列是滚动条
         self.assertIn("enter/click show in viewer", "".join(wide.g[19]))
-        self.assertIn("enter show", "".join(narrow.g[19]))  # 不足 80 列换短提示
+        self.assertIn("enter show", "".join(mid.g[19]))  # 不足 80 列换短提示
+        self.assertIn("⏎ show", "".join(narrow.g[19]))  # 不足 64 列再缩一档，六个键都在
+        self.assertIn("q quit", "".join(narrow.g[19]))
 
     def test_narrow_wraps_identity_under_the_row_without_losing_anything(self):
         Screen = self.screen_class()
@@ -463,6 +466,26 @@ class PanelLogicTest(unittest.TestCase):
                 self.assertNotIn("attached", " ".join(lines[end:end + 3]))
             else:  # 宽屏仍是单行表格
                 self.assertEqual(end - at, 1)
+
+    def test_very_narrow_keeps_doing_quiet_and_every_key(self):
+        Screen = self.screen_class()
+        p = self.drawable_panel()
+        now = time.time()
+        a = rec("demo/dev-board-demo-1", "working", last_output=now - 7, turn=now - 192)
+        a["st"]["last_tool"] = "exec_command"
+        p.absorb([a, rec("demo/main")])
+        p.selected = "demo/main"
+        screen = Screen(30, 52)
+        p.draw(screen, None)
+        lines = ["".join(row) for row in screen.g]
+        at = next(i for i, line in enumerate(lines) if "dev-board-demo-1" in line)
+        end = next(i for i, line in enumerate(lines) if i > at and " main " in line)
+        block = " ".join(lines[at:end])
+        self.assertIn("exec_command", block)
+        self.assertRegex(block, r"\b19\ds\b")  # 这一轮的用时没被挤出去
+        self.assertRegex(lines[at], r"\b7s\b")  # 「无输出」留在第一行
+        self.assertIn("╰", lines[end - 1])  # 归属引线在这个 agent 的最后一行收口
+        self.assertIn("q quit", lines[-1])  # 底栏六个键都在
 
     def test_spinner_turns_on_working_rows(self):
         p = self.panel()

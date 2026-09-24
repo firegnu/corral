@@ -35,6 +35,7 @@ COLUMNS = ("NAME", "KIND", "INST", "STATE", "DOING", "QUIET", "ATT", "SOURCE", "
 POLL = 0.05  # 面板和显示器互相看对方的间隔：点了 agent 后，右格和箭头要跟得上
 KEYS = (("↑↓", "select"), ("enter/click", "show in viewer"), ("PgUp/PgDn", "scroll"), ("s", "sort"), ("x", "stop"), ("q", "quit"))
 KEYS_SHORT = (("↑↓", "select"), ("enter", "show"), ("PgUp/Dn", "scroll"), ("s", "sort"), ("x", "stop"), ("q", "quit"))  # 不足 80 列时
+KEYS_TINY = (("↑↓", ""), ("⏎", "show"), ("PgUp/Dn", ""), ("s", "sort"), ("x", "stop"), ("q", "quit"))  # 不足 64 列时：键都在，自明的说明省掉
 SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 WHEEL_UP, WHEEL_DOWN = curses.BUTTON4_PRESSED, getattr(curses, "BUTTON5_PRESSED", 0)  # 终端通用的鼠标上报里，滚轮是 4、5 号键
 # 面板的列：键、表头、窄屏时藏掉的先后（0 = 一直显示）
@@ -327,10 +328,12 @@ def fit_columns(widths, avail):
 
 
 def line1_widths(widths, avail):
-    """折行排法第一行的列宽：「在做什么」吃掉剩下的宽度，让「无输出」贴右边。"""
+    """折行排法第一行的列宽：「在做什么」吃掉剩下的宽度，让「无输出」贴右边。
+    剩下的不够「在做什么」的最小宽度时，它挪到名字下面单独一行（doing_below），第一行只留名字、状态、无输出。"""
     widths = dict(widths, doing_inner=widths["doing"])  # 工具名和用时仍按原宽度对齐，多出的空白留在后面
     gaps = sum(len(col_gap(LINE1, i)) for i in range(len(LINE1)))
     widths["doing"] = max(1, avail - 4 - sum(widths[k] for k in LINE1 if k != "doing") - gaps)
+    widths["doing_below"] = widths["doing"] < MIN_WIDTHS["doing"]
     return widths
 
 
@@ -356,6 +359,14 @@ def identity_lines(cells, room):
         lines[-1].append((text, kind))
         used += width(text)
     return lines if lines[0] else []
+
+
+def block_lines(cells, room, doing_below):
+    """一个 agent 名字下面的几行：放不下时的「在做什么」在最前，然后是身份信息。"""
+    spin, tool, elapsed = cells["doing_parts"]
+    doing = [[(spin, "spin"), (cut(tool, max(1, room - width(spin) - width(elapsed) - 1)), "tool"),
+              (" " + elapsed if elapsed else "", "dim")]] if doing_below and tool else []
+    return doing + identity_lines(cells, room)
 
 
 def inline(s):
@@ -727,12 +738,12 @@ class Panel:
         for i, k in enumerate(keys):
             if i:
                 segs.append((col_gap(keys, i), base))
-            text = align(k, cells[k], widths[k])
-            if k == "doing" and cells[k]:  # 转圈黄色，工具名正常，用时调暗并靠右，几行的秒数上下对齐
+            text = align(k, "" if k == "doing" and widths.get("doing_below") else cells[k], widths[k])
+            if k == "doing" and cells[k] and not widths.get("doing_below"):  # 转圈黄色，工具名正常，用时调暗并靠右，几行的秒数上下对齐
                 spin, tool, elapsed = cells["doing_parts"]
                 inner = min(widths[k], widths.get("doing_inner", widths[k]))
                 room = inner - width(spin) - width(elapsed)
-                segs += ([(spin, self.color(curses.COLOR_YELLOW, bg))] if spin else []) + [(pad(tool, room), base), (elapsed, dim)]
+                segs += ([(spin, self.color(curses.COLOR_YELLOW, bg))] if spin else []) + [(pad(cut(tool, room), room), base), (elapsed, dim)]
                 if widths[k] > inner:
                     segs.append((" " * (widths[k] - inner), base))
                 continue
@@ -753,20 +764,21 @@ class Panel:
             segs.append((text, attr))
         return segs, base
 
-    def identity_segs(self, r, parts, showing):
-        """折行排法下面的一行身份信息：整行调暗；选中时左侧色条和底色接着第一行。"""
+    def identity_segs(self, r, parts, showing, last):
+        """折行排法名字下面的一行：身份信息调暗；前面一根灰色引线把这几行拴在名字上，最后一行用 ╰ 收口。
+        选中时左侧色条和底色接着第一行。"""
         name = r["name"]
         selected = name is not None and name == self.selected
         if selected and not curses.has_colors():
-            return [("    " + "".join(t for t, _ in parts), curses.A_REVERSE)], curses.A_REVERSE
+            return [("    " + ("╰ " if last else "│ ") + "".join(t for t, _ in parts), curses.A_REVERSE)], curses.A_REVERSE
         fg, bg = (self.sel_fg, self.sel_bg) if selected else (-1, -1)
         base = self.color(fg, bg)
         dim = base if selected and not self.rich else self.color(fg, bg, curses.A_DIM)
         elsewhere = r["attached"] - (1 if showing and name == showing else 0) > 0
-        attrs = {"sep": self.gray(bg), "dim": dim, "dir": dim,
+        attrs = {"sep": self.gray(bg), "dim": dim, "dir": dim, "tool": base, "spin": self.color(curses.COLOR_YELLOW, bg),
                  "attached": self.color(curses.COLOR_MAGENTA, bg, curses.A_BOLD) if elsewhere else base}
         return [("▎" if selected else " ", self.color(self.accent_fg, bg, curses.A_BOLD) if selected else base),
-                ("   ", base)] + [(t, attrs[k]) for t, k in parts], base
+                ("   ", base), ("╰ " if last else "│ ", self.gray(bg))] + [(t, attrs[k]) for t, k in parts if t], base
 
     def state_attr(self, state, bg, selected_attr=None):
         if state == "working":
@@ -841,6 +853,8 @@ class Panel:
                 keys, widths = LINE1, line1_widths(widths, w - 3)
             heads = dict((k, head) for k, head, _ in PANEL_COLUMNS)
             list_fill = box_fill
+            if widths.get("doing_below"):
+                heads["doing"] = ""
             self.line(scr, y, [("    " + "".join(col_gap(keys, i) + align(k, heads[k], widths[k]) for i, k in enumerate(keys)),
                                 self.gray())], fill=list_fill, box=edge)
             y += 1
@@ -854,7 +868,8 @@ class Panel:
                     shown.append({})
                 shown.append(row)
                 if two and "rec" in row:
-                    shown += [{**row, "identity": parts} for parts in identity_lines(row["cells"], w - 7)]
+                    block = block_lines(row["cells"], w - 9, widths["doing_below"])  # 引线占 2 格
+                    shown += [{**row, "identity": parts, "last": i == len(block) - 1} for i, parts in enumerate(block)]
             rows = shown
             avail = max(1, min(max(len(rows), LIST_MIN), h - 11))  # 至少 LIST_MIN 行，上限是给回复留几行
             at = [i for i, r in enumerate(rows) if "rec" in r and r["rec"]["name"] == self.selected]
@@ -863,7 +878,7 @@ class Panel:
             self.top = min(max(self.top, last - avail + 1), i, max(0, len(rows) - avail))
             for row in rows[self.top:self.top + avail]:
                 if "rec" in row:
-                    segs, fill = (self.identity_segs(row["rec"], row["identity"], showing) if "identity" in row
+                    segs, fill = (self.identity_segs(row["rec"], row["identity"], showing, row["last"]) if "identity" in row
                                   else self.row_segs(row["rec"], row["cells"], keys, widths, showing, now))
                     self.line(scr, y, segs, fill=fill, box=edge)
                     if row["rec"]["name"]:
@@ -924,8 +939,8 @@ class Panel:
         else:
             key = self.color(curses.COLOR_CYAN, self.bar_bg, curses.A_BOLD) | self.bar_extra
             segs = [(" ", bar)]
-            for i, (k, v) in enumerate(KEYS if w >= 80 else KEYS_SHORT):
-                segs += [("  " if i else "", bar), (k, key), (f" {v}", bar)]
+            for i, (k, v) in enumerate(KEYS if w >= 80 else KEYS_SHORT if w >= 64 else KEYS_TINY):
+                segs += [("  " if i else "", bar), (k, key), (f" {v}" if v else "", bar)]
         self.line(scr, h - 1, segs, fill=bar)
         scr.refresh()
 
