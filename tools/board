@@ -45,6 +45,8 @@ DIM_COLUMNS = ("kind", "instance", "source", "dir", "title")
 LIST_MIN = 10          # 列表区最少占几行：不够就留白，不要被回复区挤掉，分隔线位置才稳定
 MIN_WIDTHS = {"kind": 6, "instance": 6, "state": 10, "doing": 22}  # 取值范围固定或一直在变的列给够宽度，表格不跳
 RIGHT_ALIGNED = ("quiet",)  # 数字右对齐，好比
+# 意思相近的列靠得近：组内空 1 格，组间空 3 格。总宽比一律空 2 格还少 1 格，窄屏不会更早藏列
+COLUMN_GROUPS = (("name",), ("kind", "instance"), ("state", "doing", "quiet"), ("attached", "source"), ("dir", "title"))
 STATE_RANK = {"blocked": 0, "working": 2, "starting": 3, "idle": 5}  # 按状态排时的先后；疑似卡住排 1
 
 
@@ -291,11 +293,18 @@ def align(key, text, n):
     return " " * max(0, n - width(text)) + text if key in RIGHT_ALIGNED else pad(text, n)
 
 
+def col_gap(keys, i):
+    """第 i 列前面空几格。"""
+    if not i:
+        return ""
+    return " " if any(keys[i - 1] in g and keys[i] in g for g in COLUMN_GROUPS) else "   "
+
+
 def fit_columns(widths, avail):
-    """窄屏时按先后藏掉次要列，返回要显示的列键。行首标记占 4 格，列之间空 2 格。"""
+    """窄屏时按先后藏掉次要列，返回要显示的列键。行首标记占 4 格，列之间的空格见 col_gap。"""
     keys = [k for k, _, _ in PANEL_COLUMNS]
     for _, k in sorted((p, k) for k, _, p in PANEL_COLUMNS if p):
-        if 4 + sum(widths[k] for k in keys) + 2 * (len(keys) - 1) <= avail:
+        if 4 + sum(widths[k] for k in keys) + sum(len(col_gap(keys, i)) for i in range(len(keys))) <= avail:
             break
         keys.remove(k)
     return keys
@@ -491,13 +500,13 @@ class Panel:
         if not st:  # 启动中、不兼容、查不到：沿用 --once 那一行的说明
             return {"name": name, "kind": r["cells"][1], "instance": "", "state": r["cells"][3], "doing": "",
                     "quiet": "", "attached": "", "source": "", "dir": short_dir(r["cwd"]), "title": ""}
-        doing = ""
+        doing, parts = "", ("", "", "")
         if state in ("working", "blocked"):
             elapsed = secs(now - st["turn_started"]) if st.get("turn_started") else ""
-            doing = f"{st.get('last_tool') or 'thinking'} {elapsed}".strip()
-            if state == "working":
-                doing = SPIN[self.frame % len(SPIN)] + " " + doing
-        return {"name": name, "kind": st.get("kind") or "", "instance": (st.get("instance") or "")[:6],
+            spin = SPIN[self.frame % len(SPIN)] + " " if state == "working" else ""
+            parts = (spin, st.get("last_tool") or "thinking", elapsed)
+            doing = spin + f"{parts[1]} {elapsed}".strip()
+        return {"doing_parts": parts, "name": name, "kind": st.get("kind") or "", "instance": (st.get("instance") or "")[:6],
                 "state": state or "", "doing": doing, "quiet": secs(self.quiet(r, now)),
                 "attached": str(st.get("attached", "")), "source": st.get("last_input_source") or "",
                 "dir": short_dir(r["cwd"]), "title": cut(st.get("title") or "", 28)}
@@ -652,7 +661,7 @@ class Panel:
         mark = self.marker(r, now)
         if selected and not curses.has_colors():
             text = " " + ("▶" if showing and name == showing else " ") + mark + " "
-            text += "  ".join(align(k, cells[k], widths[k]) for k in keys)
+            text += "".join(col_gap(keys, i) + align(k, cells[k], widths[k]) for i, k in enumerate(keys))
             return [(text, curses.A_REVERSE)], curses.A_REVERSE
         fg, bg = (self.sel_fg, self.sel_bg) if selected else (-1, -1)
         base = self.color(fg, bg)
@@ -669,19 +678,22 @@ class Panel:
         q = self.quiet(r, now) if state == "working" else None
         for i, k in enumerate(keys):
             if i:
-                segs.append(("  ", base))
+                segs.append((col_gap(keys, i), base))
             text = align(k, cells[k], widths[k])
-            if k == "doing" and text[:1] and text[0] in SPIN:  # 转圈单独上色
-                segs += [(text[:2], self.color(curses.COLOR_YELLOW, bg)), (text[2:], base)]
+            if k == "doing" and cells[k]:  # 转圈黄色，工具名正常，用时调暗并靠右，几行的秒数上下对齐
+                spin, tool, elapsed = cells["doing_parts"]
+                room = widths[k] - width(spin) - width(elapsed)
+                segs += ([(spin, self.color(curses.COLOR_YELLOW, bg))] if spin else []) + [(pad(tool, room), base), (elapsed, dim)]
                 continue
             if k == "name":
                 attr = self.color(fg, bg, curses.A_BOLD if state == "blocked" else 0)
-            elif k == "state":  # 状态前加一个色块：眼睛先落到颜色，再读字
+            elif k == "state":  # 状态前加一个色块：眼睛先落到颜色，再读字；空闲是常态，字调暗，只留绿点
                 attr = self.state_attr(state, bg, base if selected else None)
-                segs += [("● ", attr), (align(k, cells[k], widths[k] - 2), attr)]
+                segs += [("● ", attr), (align(k, cells[k], widths[k] - 2), dim if state == "idle" else attr)]
                 continue
-            elif k == "attached":
-                attr = self.color(curses.COLOR_MAGENTA, bg, curses.A_BOLD) if elsewhere else base
+            elif k == "attached":  # 在别处接入标紫；0 是常态，灰掉
+                attr = (self.color(curses.COLOR_MAGENTA, bg, curses.A_BOLD) if elsewhere
+                        else self.gray(bg) if cells[k] == "0" else base)
             elif k == "quiet":  # 在干活却没输出：越久越显眼；其余调暗
                 attr = (self.color(curses.COLOR_RED, bg, curses.A_BOLD) if q is not None and q >= self.stuck_quiet
                         else self.color(curses.COLOR_YELLOW, bg) if q is not None and q >= 30 else dim)
@@ -760,13 +772,19 @@ class Panel:
             keys = fit_columns(widths, w - 3)
             heads = dict((k, head) for k, head, _ in PANEL_COLUMNS)
             list_fill = box_fill
-            self.line(scr, y, [("   " + "  ".join(align(k, heads[k], widths[k]) for k in keys),
-                                self.gray(-1, curses.A_BOLD))], fill=list_fill, box=edge)
+            self.line(scr, y, [("    " + "".join(col_gap(keys, i) + align(k, heads[k], widths[k]) for i, k in enumerate(keys)),
+                                self.gray())], fill=list_fill, box=edge)
             y += 1
             if not records:
                 self.line(scr, y, [("(no agents)", gray)], fill=list_fill, box=edge)
                 y += 1
             self.order = [r["rec"]["name"] for r in rows if "rec" in r and r["rec"]["name"]]
+            shown = []  # 画出来的行：分组之间空一行
+            for row in rows:
+                if "count" in row and shown:
+                    shown.append({})
+                shown.append(row)
+            rows = shown
             avail = max(1, min(max(len(rows), LIST_MIN), h - 11))  # 至少 LIST_MIN 行，上限是给回复留几行
             at = [i for i, r in enumerate(rows) if "rec" in r and r["rec"]["name"] == self.selected]
             i = at[0] if at else 0
@@ -777,13 +795,15 @@ class Panel:
                     self.line(scr, y, segs, fill=fill, box=edge)
                     if row["rec"]["name"]:
                         self.row_at[y] = row["rec"]["name"]
-                else:  # 分组小标题：组名青色，数量和一条横线灰色，画到倒数第 2 格
-                    label, count = row["group"] or "(no prefix)", f" ({row['count']})"
-                    rest = w - 4 - (width(label) + width(count) + 1)
-                    self.line(scr, y, [(label, self.color(curses.COLOR_CYAN, -1, curses.A_BOLD)),
+                elif "count" in row:  # 分组小标题：组名青色，数量和一条横线灰色；写法同框标题，横线离右边框空 1 格
+                    label, count = row["group"] or "(no prefix)", f" · {row['count']}"
+                    rest = w - 5 - (width(label) + width(count))
+                    self.line(scr, y, [(" " + label, self.color(curses.COLOR_CYAN, -1, curses.A_BOLD)),
                                        (count, self.gray()),
                                        (" " + "─" * max(0, rest), self.gray())],
                               fill=list_fill, box=edge)
+                else:  # 分组之间的空行
+                    self.line(scr, y, [], fill=list_fill, box=edge)
                 y += 1
             for _ in range(avail - len(rows[self.top:self.top + avail])):  # 行不够就留白，底色照铺
                 self.line(scr, y, [], fill=list_fill, box=edge)
@@ -810,7 +830,7 @@ class Panel:
         self.reply_y = y
         self.reply_top = max(0, min(self.reply_top, len(body) - avail))
         for segs in body[self.reply_top:self.reply_top + avail]:
-            self.line(scr, y, [(t, self.style(s)) for t, s in segs], fill=box_fill, box=edge)
+            self.line(scr, y, [(" ", self.style(None))] + [(t, self.style(s)) for t, s in segs], fill=box_fill, box=edge)
             y += 1
         for _ in range(max(0, avail - len(body[self.reply_top:self.reply_top + avail]))):
             self.line(scr, y, [], fill=box_fill, box=edge)

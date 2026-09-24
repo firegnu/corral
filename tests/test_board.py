@@ -126,7 +126,7 @@ class PanelTest(AgentTestCase):
         viewer = self.open("--viewer")
         self.assertTrue(self.seen(viewer, "Not attached"))
         panel = self.open()
-        self.assertTrue(self.seen(panel, " (2)"))
+        self.assertTrue(self.seen(panel, " · 2"))
         panel.type(b"\r")
         self.assertTrue(self.attached("demo/a", 1))
         viewer.type(b"reply:via-viewer\r")  # 在显示器里打的字送到了 demo/a
@@ -147,7 +147,7 @@ class PanelTest(AgentTestCase):
         self.idle_agents("demo/a", "demo/b")
         self.open("--viewer")
         panel = self.open()
-        self.assertTrue(self.seen(panel, " (2)"))
+        self.assertTrue(self.seen(panel, " · 2"))
         y = 6  # 第 1 行标题、第 2 行框的上边、第 3 行表头、第 4 行分组小标题、第 5 行 demo/a、第 6 行 demo/b（从 1 数）
         if re.search(rb"\x1b\[\?[\d;]*1006[\d;]*h", panel.output):  # 面板开了 SGR 格式的鼠标上报
             panel.type(f"\x1b[<0;5;{y}M\x1b[<0;5;{y}m".encode())
@@ -160,7 +160,7 @@ class PanelTest(AgentTestCase):
         self.idle_agents("demo/a")
         viewer = self.open("--viewer")
         panel = self.open()
-        self.assertTrue(self.seen(panel, " (1)"))
+        self.assertTrue(self.seen(panel, " · 1"))
         panel.type(b"\r")
         self.assertTrue(self.attached("demo/a", 1))
         self.assertEqual(self.cli("stop", "demo/a")[0], 0)
@@ -169,7 +169,7 @@ class PanelTest(AgentTestCase):
     def test_x_asks_and_only_y_stops(self):
         self.idle_agents("demo/a")
         panel = self.open()
-        self.assertTrue(self.seen(panel, " (1)"))
+        self.assertTrue(self.seen(panel, " · 1"))
         panel.type(b"x")
         self.assertTrue(self.seen(panel, "y to confirm"))
         panel.type(b"n")
@@ -217,7 +217,7 @@ class PanelTest(AgentTestCase):
         self.assertTrue(self.attached("demo/a", 1))
         viewer = self.open("--viewer")
         panel = self.open()
-        self.assertTrue(self.seen(panel, " (1)"))
+        self.assertTrue(self.seen(panel, " · 1"))
         panel.type(b"\r")
         self.assertTrue(self.seen(panel, "attached elsewhere"))
         self.until(lambda: False, timeout=1.0)
@@ -227,7 +227,7 @@ class PanelTest(AgentTestCase):
     def test_enter_without_viewer_tells_how_to_start_one(self):
         self.idle_agents("demo/a")
         panel = self.open()
-        self.assertTrue(self.seen(panel, " (1)"))
+        self.assertTrue(self.seen(panel, " · 1"))
         panel.type(b"\r")
         self.assertTrue(self.seen(panel, "tools/board --viewer"))
         self.assertEqual(self.status("demo/a").get("attached"), 0)
@@ -246,7 +246,7 @@ class PanelTest(AgentTestCase):
     def test_groups_and_marks_turn_that_just_finished(self):
         self.idle_agents("demo/a", "demo/b")
         panel = self.open()
-        self.assertTrue(self.seen(panel, " (2)"))
+        self.assertTrue(self.seen(panel, " · 2"))
         self.assertEqual(self.cli("send", "demo/b", "reply:done")[0], 0)  # 光标在 demo/a 上，demo/b 做完一轮
         self.assertTrue(self.seen(panel, "●"))
 
