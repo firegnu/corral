@@ -33,9 +33,21 @@ import unicodedata
 CORRAL = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin", "corral")
 COLUMNS = ("NAME", "KIND", "INST", "STATE", "DOING", "QUIET", "ATT", "SOURCE", "TITLE")
 POLL = 0.05  # 面板和显示器互相看对方的间隔：点了 agent 后，右格和箭头要跟得上
-KEYS = (("↑↓", "select"), ("enter/click", "show in viewer"), ("PgUp/PgDn", "scroll"), ("s", "sort"), ("x", "stop"), ("q", "quit"))
-KEYS_SHORT = (("↑↓", "select"), ("enter", "show"), ("PgUp/Dn", "scroll"), ("s", "sort"), ("x", "stop"), ("q", "quit"))  # 不足 80 列时
-KEYS_TINY = (("↑↓", ""), ("⏎", "show"), ("PgUp/Dn", ""), ("s", "sort"), ("x", "stop"), ("q", "quit"))  # 不足 64 列时：键都在，自明的说明省掉
+TAIL_KEYS = (("s", "sort"), ("x", "stop"), ("q", "quit"))
+
+
+def footer_keys(w, reply):
+    """底栏按键，从长到短挑第一档放得下的：回复区显示时才有 PgUp/Dn 可滚，r 是隐藏；隐藏时 r 是显示。
+    越窄说明越短，但键一个不少。"""
+    for show, scroll, rkey in ((("enter/click", "show in viewer"), ("PgUp/PgDn", "scroll"), "hide"),
+                               (("enter", "show"), ("PgUp/Dn", "scroll"), "hide"),
+                               (("⏎", "show"), ("PgUp/Dn", ""), "hide"),
+                               (("⏎", ""), ("PgUp/Dn", ""), "hide")):
+        keys = ((("↑↓", "select" if show[0] != "⏎" else ""), show) + ((scroll, ("r", rkey)) if reply else (("r", "reply"),))
+                + TAIL_KEYS)
+        if 1 + sum(width(k) + (1 + width(v) if v else 0) for k, v in keys) + 2 * (len(keys) - 1) <= w - 1:
+            break
+    return keys
 SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 WHEEL_UP, WHEEL_DOWN = curses.BUTTON4_PRESSED, getattr(curses, "BUTTON5_PRESSED", 0)  # 终端通用的鼠标上报里，滚轮是 4、5 号键
 # 面板的列：键、表头、窄屏时藏掉的先后（0 = 一直显示）
@@ -433,6 +445,7 @@ class Panel:
         self.order = []  # 表格里 agent 的显示顺序，给上下键用
         self.top = 0  # 表格滚动位置
         self.by_state = False  # 按 s 切换：按名字排 / 按状态排
+        self.show_reply = False  # 按 r 切换：显示 / 隐藏选中 agent 的上一轮回复；默认隐藏，隐藏时不去取
         self.frame = 0  # 转圈用，按时间走
         self.reply = (None, "", False)  # (名字, 文字, 是不是提示文字而不是回复)
         self.reply_top = 0
@@ -461,7 +474,7 @@ class Panel:
     def reply_loop(self):
         while True:
             name = self.selected
-            if name:
+            if name and self.show_reply:
                 code, out = corral("reply", name)
                 if code == 0:
                     self.reply = (name, out.get("text") or "", False)
@@ -625,15 +638,19 @@ class Panel:
             except curses.error:
                 return
             if button & (WHEEL_UP | WHEEL_DOWN):  # 滚轮只滚回复，不选行
-                if self.reply_y is not None and y >= self.reply_y:
+                if self.show_reply and self.reply_y is not None and y >= self.reply_y:
                     self.reply_top = max(0, self.reply_top + (-1 if button & WHEEL_UP else 1))
             elif y in self.row_at:
                 self.select(self.row_at[y])
                 self.show_in_viewer()
-        elif key == curses.KEY_NPAGE:
+        elif key == curses.KEY_NPAGE and self.show_reply:
             self.reply_top += page
-        elif key == curses.KEY_PPAGE:
+        elif key == curses.KEY_PPAGE and self.show_reply:
             self.reply_top = max(0, self.reply_top - page)
+        elif key == ord("r"):
+            self.show_reply = not self.show_reply
+            if self.show_reply:
+                self.wake_reply.set()  # 马上取一次，不等下一轮
         elif key == ord("s"):
             self.by_state = not self.by_state
         elif key == ord("x") and self.selected:
@@ -802,7 +819,7 @@ class Panel:
         now = time.time()
         working = any(r["state"] == "working" for r in self.records or [])
         return (id(self.records), self.reply, self.selected, self.message, len(self.new), bool(info),
-                info.get("showing") if info else None, int(now), int(now * 5) if working else 0)
+                info.get("showing") if info else None, self.show_reply, int(now), int(now * 5) if working else 0)
 
     def draw(self, scr, info):
         h, w = scr.getmaxyx()
@@ -871,7 +888,10 @@ class Panel:
                     block = block_lines(row["cells"], w - 9, widths["doing_below"])  # 引线占 2 格
                     shown += [{**row, "identity": parts, "last": i == len(block) - 1} for i, parts in enumerate(block)]
             rows = shown
-            avail = max(1, min(max(len(rows), LIST_MIN), h - 11))  # 至少 LIST_MIN 行，上限是给回复留几行
+            if self.show_reply:
+                avail = max(1, min(max(len(rows), LIST_MIN), h - 11))  # 至少 LIST_MIN 行，上限是给回复留几行
+            else:
+                avail = max(1, h - 2 - y)  # 回复区隐藏：列表占满到框的下边
             at = [i for i, r in enumerate(rows) if "rec" in r and r["rec"]["name"] == self.selected]
             i = at[0] if at else 0
             last = at[-1] if at else 0  # 折行排法时选中 agent 的几行都要露出来
@@ -896,41 +916,47 @@ class Panel:
             for _ in range(avail - len(rows[self.top:self.top + avail])):  # 行不够就留白，底色照铺
                 self.line(scr, y, [], fill=list_fill, box=edge)
                 y += 1
-        # 回复区：框里的一条分节线隔开，标签嵌在线里；正文右边留一格给滚动条
-        name, text, note = self.reply
-        if self.selected:
-            label = [(self.selected, title), (" · last reply", edge)]
+        if not self.show_reply:  # 回复区隐藏：框里剩下的行留白
+            self.reply_y = None
+            while y < h - 2:
+                self.line(scr, y, [], fill=box_fill, box=edge)
+                y += 1
         else:
-            label = [("last reply", title)]
-        self.rule(scr, y, "├┤", label)
-        y += 1
-        if not self.selected:
-            body = [[("(no reply yet)", "note")]]
-        elif name != self.selected:
-            body = [[("loading…", "note")]]
-        elif note:
-            body = [[(text, "note")]]
-        else:
-            if self.md[:2] != (text, w):
-                self.md = (text, w, md_lines(text, w - 4))
-            body = self.md[2]
-        avail = h - 2 - y                                    # 末行是底栏，倒数第 2 行是框的下边
-        self.reply_y = y
-        self.reply_top = max(0, min(self.reply_top, len(body) - avail))
-        for segs in body[self.reply_top:self.reply_top + avail]:
-            self.line(scr, y, [(" ", self.style(None))] + [(t, self.style(s)) for t, s in segs], fill=box_fill, box=edge)
+            # 回复区：框里的一条分节线隔开，标签嵌在线里；正文右边留一格给滚动条
+            name, text, note = self.reply
+            if self.selected:
+                label = [(self.selected, title), (" · last reply", edge)]
+            else:
+                label = [("last reply", title)]
+            self.rule(scr, y, "├┤", label)
             y += 1
-        for _ in range(max(0, avail - len(body[self.reply_top:self.reply_top + avail]))):
-            self.line(scr, y, [], fill=box_fill, box=edge)
-            y += 1
-        if len(body) > avail > 0:  # 放不下时最右一列（边框里侧）画滚动条：░ 轨道，█ 滑块
-            n = max(1, round(avail * avail / len(body)))
-            top = min(avail - n, round(self.reply_top * avail / len(body)))
-            for i in range(avail):
-                try:
-                    scr.addstr(self.reply_y + i, w - 2, "█" if top <= i < top + n else "░", gray)
-                except curses.error:
-                    pass
+            if not self.selected:
+                body = [[("(no reply yet)", "note")]]
+            elif name != self.selected:
+                body = [[("loading…", "note")]]
+            elif note:
+                body = [[(text, "note")]]
+            else:
+                if self.md[:2] != (text, w):
+                    self.md = (text, w, md_lines(text, w - 4))
+                body = self.md[2]
+            avail = h - 2 - y                                    # 末行是底栏，倒数第 2 行是框的下边
+            self.reply_y = y
+            self.reply_top = max(0, min(self.reply_top, len(body) - avail))
+            for segs in body[self.reply_top:self.reply_top + avail]:
+                self.line(scr, y, [(" ", self.style(None))] + [(t, self.style(s)) for t, s in segs], fill=box_fill, box=edge)
+                y += 1
+            for _ in range(max(0, avail - len(body[self.reply_top:self.reply_top + avail]))):
+                self.line(scr, y, [], fill=box_fill, box=edge)
+                y += 1
+            if len(body) > avail > 0:  # 放不下时最右一列（边框里侧）画滚动条：░ 轨道，█ 滑块
+                n = max(1, round(avail * avail / len(body)))
+                top = min(avail - n, round(self.reply_top * avail / len(body)))
+                for i in range(avail):
+                    try:
+                        scr.addstr(self.reply_y + i, w - 2, "█" if top <= i < top + n else "░", gray)
+                    except curses.error:
+                        pass
         self.rule(scr, y, "╰╯")
         y += 1
         # 底栏：按键名青色，键名后空 1 格、项间空 2 格；不足 80 列用短提示；有消息时换成消息
@@ -939,7 +965,7 @@ class Panel:
         else:
             key = self.color(curses.COLOR_CYAN, self.bar_bg, curses.A_BOLD) | self.bar_extra
             segs = [(" ", bar)]
-            for i, (k, v) in enumerate(KEYS if w >= 80 else KEYS_SHORT if w >= 64 else KEYS_TINY):
+            for i, (k, v) in enumerate(footer_keys(w, self.show_reply)):
                 segs += [("  " if i else "", bar), (k, key), (f" {v}" if v else "", bar)]
         self.line(scr, h - 1, segs, fill=bar)
         scr.refresh()

@@ -183,6 +183,10 @@ class PanelTest(AgentTestCase):
         self.idle_agents("demo/a", script=["reply:hello-board"])
         self.states_until("demo/a", lambda s: s.get("last_event") == "Stop")
         panel = self.open()
+        self.assertTrue(self.seen(panel, " · 1"))
+        self.until(lambda: False, timeout=1.0)
+        self.assertNotIn(b"hello-board", panel.output)  # 回复区默认不显示，也不去取
+        panel.type(b"r")
         self.assertTrue(self.seen(panel, "hello-board"))
 
     def test_spinner_keeps_turning_while_working(self):
@@ -200,6 +204,8 @@ class PanelTest(AgentTestCase):
         self.states_until("demo/a", lambda s: s.get("last_event") == "Stop")
         self.open("--viewer")
         panel = self.open()
+        self.assertTrue(self.seen(panel, " · 1"))
+        panel.type(b"r")
         self.assertTrue(self.seen(panel, "aaaa"))
         self.until(lambda: False, timeout=0.5)
         self.assertNotIn(b"END", panel.output)  # 回复比回复区长，末尾还没露出来
@@ -427,8 +433,9 @@ class PanelLogicTest(unittest.TestCase):
         p = self.drawable_panel()
         p.absorb([rec("demo/a")])
         p.selected = "demo/a"
+        p.show_reply = True
         p.reply = ("demo/a", "\n".join(f"第 {i} 行" for i in range(60)), False)
-        wide, mid, narrow = Screen(20, 100), Screen(20, 70), Screen(20, 60)
+        wide, mid, narrow = Screen(20, 100), Screen(20, 75), Screen(20, 60)
         p.draw(wide, None)
         p.draw(mid, None)
         p.draw(narrow, None)
@@ -466,6 +473,31 @@ class PanelLogicTest(unittest.TestCase):
                 self.assertNotIn("attached", " ".join(lines[end:end + 3]))
             else:  # 宽屏仍是单行表格
                 self.assertEqual(end - at, 1)
+
+    def test_r_toggles_reply_section(self):
+        Screen = self.screen_class()
+        p = self.drawable_panel()
+        p.absorb([rec("demo/a")])
+        p.selected = "demo/a"
+        p.reply = ("demo/a", "hello-board", False)
+
+        def drawn():
+            screen = Screen(20, 52)
+            p.draw(screen, None)
+            return ["".join(row) for row in screen.g]
+
+        lines = drawn()  # 默认不显示：列表占满框，底栏提示 r reply
+        self.assertFalse(any("last reply" in line or "hello-board" in line for line in lines))
+        self.assertIn("r reply", lines[-1])
+        self.assertEqual(lines[-2][0], "╰")
+        p.handle(ord("r"), 5)
+        lines = drawn()
+        self.assertTrue(any("last reply" in line for line in lines))
+        self.assertTrue(any("hello-board" in line for line in lines))
+        self.assertIn("r hide", lines[-1])
+        self.assertIn("q quit", lines[-1])
+        p.handle(ord("r"), 5)
+        self.assertFalse(any("hello-board" in line for line in drawn()))
 
     def test_very_narrow_keeps_doing_quiet_and_every_key(self):
         Screen = self.screen_class()
