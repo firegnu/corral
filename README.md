@@ -147,13 +147,14 @@ Agents it opens stay open until you say to close them, so you can follow up or a
 `tools/board` shows all agents in the terminal. Split your terminal into two panes and run:
 
 ```sh
-<repo>/tools/board            # left: panel with a status table and the selected agent's last reply
+<repo>/tools/board            # left: panel with a status table; press r for the selected agent's last reply
 <repo>/tools/board --viewer   # right: a viewer that attaches to whatever the panel selects
 ```
 
 - Rows are grouped by name prefix. Each row shows state, what the agent is doing (last tool and how long this turn has run), how long since the last output, attached windows, the last input source, directory and title.
 - Markers: red `!` stuck, yellow `?` probably stuck, cyan `●` finished a turn you have not looked at, green `▶` shown on the right.
-- Keys: ↑/↓ or j/k to select, Enter or click to show it on the right, `s` to sort by state, `x` then `y` to stop it, `q` to quit.
+- A narrow pane hides nothing: each agent wraps onto a few lines. With many agents the list scrolls and shows how many are hidden above or below.
+- Keys: ↑/↓ or j/k to select, Enter or click to show it on the right, `r` to show or hide the last reply, `s` to sort by state, `x` then `y` to stop it, `q` to quit.
 - Options: `--prefix demo/`, `--bell`, `--once`.
 
 It is a companion tool, not a `corral` subcommand; add a shell alias if you use it often.
