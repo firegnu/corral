@@ -505,6 +505,17 @@ class PanelLogicTest(unittest.TestCase):
         self.assertIn("↑", lines[1])  # 滚下去之后，上面藏住的写在框顶
         self.assertEqual(p.selected, "demo/a0")  # 滚轮只滚，不换选中的
 
+    def test_narrow_draws_agent_still_starting(self):
+        Screen = self.screen_class()
+        p = self.drawable_panel()
+        starting = {"name": "demo/new", "state": None, "attached": 0, "st": {}, "instance": None, "cwd": "/tmp/x",
+                    "starting": True, "cells": ("demo/new", "", "", "(starting)", "", "", "", "", "")}
+        p.absorb([rec("demo/a"), starting])
+        p.selected = "demo/a"
+        screen = Screen(20, 52)
+        p.draw(screen, None)  # 折行排法下有 agent 还在启动，不能崩
+        self.assertTrue(any("(starting)" in "".join(row) for row in screen.g))
+
     def test_r_toggles_reply_section(self):
         Screen = self.screen_class()
         p = self.drawable_panel()

@@ -573,7 +573,7 @@ class Panel:
         st, state = r["st"], r["state"]
         name = (r["name"] or "")[len(g):] or r["cells"][0]
         if not st:  # 启动中、不兼容、查不到：沿用 --once 那一行的说明
-            return {"name": name, "kind": r["cells"][1], "instance": "", "state": r["cells"][3], "doing": "",
+            return {"doing_parts": ("", "", ""), "name": name, "kind": r["cells"][1], "instance": "", "state": r["cells"][3], "doing": "",
                     "quiet": "", "attached": "", "source": "", "dir": short_dir(r["cwd"]), "title": "", "title_full": ""}
         doing, parts = "", ("", "", "")
         if state in ("working", "blocked"):
