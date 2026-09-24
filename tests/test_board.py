@@ -288,6 +288,42 @@ class PanelLogicTest(unittest.TestCase):
     def panel(self, **kw):
         return self.board.Panel(None, 3.0, **kw)
 
+    def screen_class(self):
+        board = self.board
+
+        class Screen:  # 只记字符的假屏幕
+            def __init__(s, h, w):
+                s.h, s.w, s.g = h, w, [[" "] * w for _ in range(h)]
+
+            def getmaxyx(s):
+                return s.h, s.w
+
+            def erase(s):
+                s.g = [[" "] * s.w for _ in range(s.h)]
+
+            def addstr(s, y, x, text, attr=0):
+                for ch in text:
+                    for i in range(board.width(ch)):  # 中文占两格，第二格留空
+                        if x < s.w:
+                            s.g[y][x] = "" if i else ch
+                        x += 1
+
+            insstr = addstr
+
+            def refresh(s):
+                pass
+
+        return Screen
+
+    def drawable_panel(self):
+        """能直接 draw 进假屏幕的面板：按无色终端画。"""
+        curses = self.board.curses
+        self.addCleanup(setattr, curses, "has_colors", curses.has_colors)  # 共用的 curses 模块，测完还原
+        curses.has_colors = lambda: False
+        p = self.panel()
+        p.gray_fg, p.bar_bg, p.bar_extra, p.sel_fg, p.sel_bg, p.bar = -1, -1, 0, -1, -1, 0
+        return p
+
     def test_short_dir(self):
         short = self.board.short_dir
         self.assertEqual(short("/Users/u/Developer/p/owlet", "/Users/u"), "…/p/owlet")
@@ -387,33 +423,8 @@ class PanelLogicTest(unittest.TestCase):
         self.assertEqual(p.cells(p.records[1], "owlet/", now)["name"], "a")
 
     def test_scrollbar_and_short_hints(self):
-        class Screen:  # 只记字符的假屏幕
-            def __init__(s, h, w):
-                s.h, s.w, s.g = h, w, [[" "] * w for _ in range(h)]
-
-            def getmaxyx(s):
-                return s.h, s.w
-
-            def erase(s):
-                s.g = [[" "] * s.w for _ in range(s.h)]
-
-            def addstr(s, y, x, text, attr=0):
-                for ch in text:
-                    for i in range(self.board.width(ch)):  # 中文占两格，第二格留空
-                        if x < s.w:
-                            s.g[y][x] = "" if i else ch
-                        x += 1
-
-            insstr = addstr
-
-            def refresh(s):
-                pass
-
-        curses = self.board.curses
-        self.addCleanup(setattr, curses, "has_colors", curses.has_colors)  # 共用的 curses 模块，测完还原
-        curses.has_colors = lambda: False
-        p = self.panel()
-        p.gray_fg, p.bar_bg, p.bar_extra, p.sel_fg, p.sel_bg, p.bar = -1, -1, 0, -1, -1, 0
+        Screen = self.screen_class()
+        p = self.drawable_panel()
         p.absorb([rec("demo/a")])
         p.selected = "demo/a"
         p.reply = ("demo/a", "\n".join(f"第 {i} 行" for i in range(60)), False)
@@ -425,6 +436,33 @@ class PanelLogicTest(unittest.TestCase):
         self.assertEqual(right, {"░", "█"})  # 回复放不下：边框里侧那一列是滚动条
         self.assertIn("enter/click show in viewer", "".join(wide.g[19]))
         self.assertIn("enter show", "".join(narrow.g[19]))  # 不足 80 列换短提示
+
+    def test_narrow_wraps_identity_under_the_row_without_losing_anything(self):
+        Screen = self.screen_class()
+        p = self.drawable_panel()
+        title = "Login form validation for checkout"  # 比单行表格里的 28 格长
+        a = rec("demo/alice", instance="a9a2be000000", attached=1, cwd="/tmp/wt/owlet-m3-api")
+        a["st"].update(title=title, last_input_source="send")
+        b = rec("demo/bob", instance="b5fe53000000", cwd="/tmp/wt/owlet-m3-web")
+        p.absorb([a, b])
+        p.selected = "demo/alice"
+        for w in (70, 200):
+            screen = Screen(30, w)
+            p.draw(screen, None)
+            lines = ["".join(row) for row in screen.g]
+            at = next(i for i, line in enumerate(lines) if "alice" in line)
+            end = next(i for i, line in enumerate(lines) if "bob" in line)
+            block = " ".join(lines[at:end])
+            for value in ("alice", "idle", "claude", "a9a2be", "send", "owlet-m3-api"):
+                self.assertIn(value, block, (w, value))
+            if w == 70:  # 放不下一行：下面几行按项折行，标题完整；表头只有一行；接入数为 0 不写
+                self.assertGreater(end - at, 1)
+                self.assertIn(title, block)
+                self.assertIn("attached 1", block)
+                self.assertFalse(any("KIND" in line for line in lines))
+                self.assertNotIn("attached", " ".join(lines[end:end + 3]))
+            else:  # 宽屏仍是单行表格
+                self.assertEqual(end - at, 1)
 
     def test_spinner_turns_on_working_rows(self):
         p = self.panel()

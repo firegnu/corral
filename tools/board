@@ -47,6 +47,8 @@ MIN_WIDTHS = {"kind": 6, "instance": 6, "state": 10, "doing": 22}  # 取值范�
 RIGHT_ALIGNED = ("quiet",)  # 数字右对齐，好比
 # 意思相近的列靠得近：组内空 1 格，组间空 3 格。总宽比一律空 2 格还少 1 格，窄屏不会更早藏列
 COLUMN_GROUPS = (("name",), ("kind", "instance"), ("state", "doing", "quiet"), ("attached", "source"), ("dir", "title"))
+# 一行放不下时不藏列：第一行照旧按列对齐，放要一眼看的；身份信息在下面按项折行
+LINE1 = ("name", "state", "doing", "quiet")
 STATE_RANK = {"blocked": 0, "working": 2, "starting": 3, "idle": 5}  # 按状态排时的先后；疑似卡住排 1
 
 
@@ -69,6 +71,20 @@ def cut(s, n):
             return out[:-1] + "…"
         out += ch
     return out
+
+
+def lcut(s, n):
+    """从左边截，留末尾：目录之间的区别都在最后几段。"""
+    if n <= 0:
+        return ""
+    if width(s) <= n:
+        return s
+    out = ""
+    for ch in reversed(s):
+        if width(ch + out) > n - 1:
+            break
+        out = ch + out
+    return "…" + out
 
 
 def pad(s, n):
@@ -310,6 +326,38 @@ def fit_columns(widths, avail):
     return keys
 
 
+def line1_widths(widths, avail):
+    """折行排法第一行的列宽：「在做什么」吃掉剩下的宽度，让「无输出」贴右边。"""
+    widths = dict(widths, doing_inner=widths["doing"])  # 工具名和用时仍按原宽度对齐，多出的空白留在后面
+    gaps = sum(len(col_gap(LINE1, i)) for i in range(len(LINE1)))
+    widths["doing"] = max(1, avail - 4 - sum(widths[k] for k in LINE1 if k != "doing") - gaps)
+    return widths
+
+
+def identity_lines(cells, room):
+    """折行排法下面几行：种类 实例 · 接入 · 来源 · 目录 · 标题，项之间「 · 」。
+    一行放不下下一项就整项换行，不从中间断开；单项一行都放不下才截（目录从左截）。
+    这几项只在换任务、换窗口时才变，所以每个 agent 占几行基本稳定。接入数为 0 不写。"""
+    items = [(f"{cells['kind']} {cells['instance']}".strip(), "dim"),
+             (f"attached {cells['attached']}" if cells["attached"] not in ("", "0") else "", "attached"),
+             (f"via {cells['source']}" if cells["source"] else "", "dim"),
+             (cells["dir"], "dir"), (cells["title_full"], "dim")]
+    lines, used = [[]], 0
+    for text, kind in items:
+        if not text:
+            continue
+        text = lcut(text, room) if kind == "dir" else cut(text, room)
+        if lines[-1] and used + 3 + width(text) > room:
+            lines.append([])
+            used = 0
+        if lines[-1]:
+            lines[-1].append((" · ", "sep"))
+            used += 3
+        lines[-1].append((text, kind))
+        used += width(text)
+    return lines if lines[0] else []
+
+
 def inline(s):
     """行内的 `代码` 和 **粗体**。"""
     segs = []
@@ -499,7 +547,7 @@ class Panel:
         name = (r["name"] or "")[len(g):] or r["cells"][0]
         if not st:  # 启动中、不兼容、查不到：沿用 --once 那一行的说明
             return {"name": name, "kind": r["cells"][1], "instance": "", "state": r["cells"][3], "doing": "",
-                    "quiet": "", "attached": "", "source": "", "dir": short_dir(r["cwd"]), "title": ""}
+                    "quiet": "", "attached": "", "source": "", "dir": short_dir(r["cwd"]), "title": "", "title_full": ""}
         doing, parts = "", ("", "", "")
         if state in ("working", "blocked"):
             elapsed = secs(now - st["turn_started"]) if st.get("turn_started") else ""
@@ -509,7 +557,7 @@ class Panel:
         return {"doing_parts": parts, "name": name, "kind": st.get("kind") or "", "instance": (st.get("instance") or "")[:6],
                 "state": state or "", "doing": doing, "quiet": secs(self.quiet(r, now)),
                 "attached": str(st.get("attached", "")), "source": st.get("last_input_source") or "",
-                "dir": short_dir(r["cwd"]), "title": cut(st.get("title") or "", 28)}
+                "dir": short_dir(r["cwd"]), "title": cut(st.get("title") or "", 28), "title_full": st.get("title") or ""}
 
     # 按键
 
@@ -682,8 +730,11 @@ class Panel:
             text = align(k, cells[k], widths[k])
             if k == "doing" and cells[k]:  # 转圈黄色，工具名正常，用时调暗并靠右，几行的秒数上下对齐
                 spin, tool, elapsed = cells["doing_parts"]
-                room = widths[k] - width(spin) - width(elapsed)
+                inner = min(widths[k], widths.get("doing_inner", widths[k]))
+                room = inner - width(spin) - width(elapsed)
                 segs += ([(spin, self.color(curses.COLOR_YELLOW, bg))] if spin else []) + [(pad(tool, room), base), (elapsed, dim)]
+                if widths[k] > inner:
+                    segs.append((" " * (widths[k] - inner), base))
                 continue
             if k == "name":
                 attr = self.color(fg, bg, curses.A_BOLD if state == "blocked" else 0)
@@ -701,6 +752,21 @@ class Panel:
                 attr = dim if k in DIM_COLUMNS else base
             segs.append((text, attr))
         return segs, base
+
+    def identity_segs(self, r, parts, showing):
+        """折行排法下面的一行身份信息：整行调暗；选中时左侧色条和底色接着第一行。"""
+        name = r["name"]
+        selected = name is not None and name == self.selected
+        if selected and not curses.has_colors():
+            return [("    " + "".join(t for t, _ in parts), curses.A_REVERSE)], curses.A_REVERSE
+        fg, bg = (self.sel_fg, self.sel_bg) if selected else (-1, -1)
+        base = self.color(fg, bg)
+        dim = base if selected and not self.rich else self.color(fg, bg, curses.A_DIM)
+        elsewhere = r["attached"] - (1 if showing and name == showing else 0) > 0
+        attrs = {"sep": self.gray(bg), "dim": dim, "dir": dim,
+                 "attached": self.color(curses.COLOR_MAGENTA, bg, curses.A_BOLD) if elsewhere else base}
+        return [("▎" if selected else " ", self.color(self.accent_fg, bg, curses.A_BOLD) if selected else base),
+                ("   ", base)] + [(t, attrs[k]) for t, k in parts], base
 
     def state_attr(self, state, bg, selected_attr=None):
         if state == "working":
@@ -770,6 +836,9 @@ class Panel:
             widths = {k: max([width(head), MIN_WIDTHS.get(k, 0)] + [width(r["cells"][k]) for r in rows if "rec" in r])
                       for k, head, _ in PANEL_COLUMNS}
             keys = fit_columns(widths, w - 3)
+            two = len(keys) < len(PANEL_COLUMNS)  # 一行放不下：一个 agent 两行，不藏列
+            if two:
+                keys, widths = LINE1, line1_widths(widths, w - 3)
             heads = dict((k, head) for k, head, _ in PANEL_COLUMNS)
             list_fill = box_fill
             self.line(scr, y, [("    " + "".join(col_gap(keys, i) + align(k, heads[k], widths[k]) for i, k in enumerate(keys)),
@@ -784,14 +853,18 @@ class Panel:
                 if "count" in row and shown:
                     shown.append({})
                 shown.append(row)
+                if two and "rec" in row:
+                    shown += [{**row, "identity": parts} for parts in identity_lines(row["cells"], w - 7)]
             rows = shown
             avail = max(1, min(max(len(rows), LIST_MIN), h - 11))  # 至少 LIST_MIN 行，上限是给回复留几行
             at = [i for i, r in enumerate(rows) if "rec" in r and r["rec"]["name"] == self.selected]
             i = at[0] if at else 0
-            self.top = min(max(self.top, i - avail + 1), i, max(0, len(rows) - avail))
+            last = at[-1] if at else 0  # 折行排法时选中 agent 的几行都要露出来
+            self.top = min(max(self.top, last - avail + 1), i, max(0, len(rows) - avail))
             for row in rows[self.top:self.top + avail]:
                 if "rec" in row:
-                    segs, fill = self.row_segs(row["rec"], row["cells"], keys, widths, showing, now)
+                    segs, fill = (self.identity_segs(row["rec"], row["identity"], showing) if "identity" in row
+                                  else self.row_segs(row["rec"], row["cells"], keys, widths, showing, now))
                     self.line(scr, y, segs, fill=fill, box=edge)
                     if row["rec"]["name"]:
                         self.row_at[y] = row["rec"]["name"]
