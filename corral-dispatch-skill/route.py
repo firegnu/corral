@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""编排技能的路由：把一段任务摘要交给 TypeSafe 的分类模型，一次请求问完「几档、要不要交叉审查」。
+"""编排技能的路由：把一段任务摘要交给 TypeSafe 的分类模型，一次请求问完「几档、要不要交叉审查、影响面」。
 交给哪家不问它，由主控照 SKILL.md 第 3 节的分工表定。
 
 主控拆完每件活调一次，用法见 SKILL.md 第 3 节。只用标准库；key 从环境变量 TYPESAFE_API_KEY 读。
@@ -44,15 +44,25 @@ CROSS_REVIEW = {
     "core_rules": "Does the task in `task_summary` implement or change the product's core business rules, "
                   "the central decision logic the product depends on?",
 }
+# 影响面「看得见」那一档；碰要害直接用交叉审查的结论。措辞试过三种，这种分得最开（docs/SPIKE.md 第三轮）
+VISIBLE = ("Is the task in `task_summary` limited to presentation (visual layout, colors, text, documentation) or "
+           "read-only research, with no new features, no input handling changes and no logic changes?")
+# 只出方案、调研的活上一题会拿不准（在讲怎么设计交互），单问一题，两题取较高（docs/SPIKE.md 第四轮）
+DOC_ONLY = ("Does the task in `task_summary` only produce a written proposal, research notes or a design document, "
+            "without changing any program code?")
 CONFIDENT = 0.8   # 几档：置信度到这个数才给结论，否则交回主控
 CROSS_YES = 0.8   # 交叉审查：任何一题到这个数算「要」
 CROSS_NO = 0.2    # 四题都不超过这个数算「不要」；其余交回主控
+VISIBLE_YES = 0.8  # 影响面：到这个数算只影响显示或文档
+VISIBLE_NO = 0.2   # 不超过这个数算不只影响显示；其余交回主控
 
 
 def build_request(summary):
     questions = {"tier": TIER_QUESTION}
     for key, text in CROSS_REVIEW.items():
         questions["cross_" + key] = {"type": "noul", "instructions": text}
+    questions["visible"] = {"type": "noul", "instructions": VISIBLE}
+    questions["doc_only"] = {"type": "noul", "instructions": DOC_ONLY}
     return {"state": {"task_summary": summary}, "model": MODEL, "questions": questions}
 
 
@@ -87,6 +97,17 @@ def shape(resp):
     cross = {k[len("cross_"):]: round(v["noul"], 3) for k, v in a.items() if k.startswith("cross_")}
     top = max(cross.values())
     out["cross_review"] = {"verdict": "要" if top >= CROSS_YES else "不要" if top <= CROSS_NO else None, **cross}
+    cv = out["cross_review"]["verdict"]
+    visible = round(max(a["visible"]["noul"], a["doc_only"]["noul"]), 3)
+    if cv == "要":
+        impact = "碰要害"
+    elif visible >= VISIBLE_YES:
+        impact = "看得见"
+    elif visible <= VISIBLE_NO and cv == "不要":
+        impact = "改行为"
+    else:
+        impact = None
+    out["impact"] = {"verdict": impact, "visible": visible}
     out["usage"] = resp.get("usage")
     return out
 

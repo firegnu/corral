@@ -166,7 +166,7 @@ corral 的日常用法不是写脚本，而是对正在聊的 agent 说一句话
 - 安装：把这个目录软链接到 `~/.claude/skills/corral-dispatch` 和 `~/.agents/skills/corral-dispatch`。
 - 在项目里启用：把 [`项目AGENTS模板.md`](corral-dispatch-skill/项目AGENTS模板.md) 里那一节贴进项目的 `AGENTS.md`。项目里不用写哪家做什么、用哪一档，由技能决定。
 - 交给哪家：主控照技能里的一张分工表定（Codex 做后端，Claude Code 做前端，pi 做项目代码之外的轻档杂活）。
-- 几档（轻、常规、重对应的模型和强度）、要不要交叉审查：由 [`route.py`](corral-dispatch-skill/route.py) 把一段任务摘要交给分类模型（TypeSafe）判断。有把握的结论照用；拿不准、没有 `TYPESAFE_API_KEY`，或者调用失败，都退回主控自己判断，分派不会被卡住。
+- 几档（轻、常规、重对应的模型和强度）、要不要交叉审查、影响面（看得见、改行为、碰要害，决定验证和审查做多少）：由 [`route.py`](corral-dispatch-skill/route.py) 把一段任务摘要交给分类模型（TypeSafe）判断。有把握的结论照用；拿不准、没有 `TYPESAFE_API_KEY`，或者调用失败，都退回主控自己判断，分派不会被卡住。
 - 费 token 的配置一律先问用户。
 
 详见 [`corral-dispatch-skill/README.md`](corral-dispatch-skill/README.md)。

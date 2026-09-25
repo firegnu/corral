@@ -166,7 +166,7 @@ It is a companion tool, not a `corral` subcommand; add a shell alias if you use 
 - Install by symlinking the folder into `~/.claude/skills/corral-dispatch` and `~/.agents/skills/corral-dispatch`.
 - Enable it in a project by pasting the section from [`项目AGENTS模板.md`](corral-dispatch-skill/项目AGENTS模板.md) into the project's `AGENTS.md`. The project does not list which agent does what or which tier to use; the skill decides.
 - Which agent: the controller follows one split table in the skill (Codex for backend, Claude Code for frontend, pi for light chores outside the product code).
-- Which tier (light / regular / heavy model and effort) and whether to cross-review: [`route.py`](corral-dispatch-skill/route.py) asks a classification model (TypeSafe) with a short task summary. Confident answers are used; uncertain answers, a missing `TYPESAFE_API_KEY` or a failed call fall back to the controller's own judgment, so dispatching never blocks.
+- Which tier (light / regular / heavy model and effort), whether to cross-review, and the impact level (visible-only, behavior change, critical; it sets how much verification and review a task gets): [`route.py`](corral-dispatch-skill/route.py) asks a classification model (TypeSafe) with a short task summary. Confident answers are used; uncertain answers, a missing `TYPESAFE_API_KEY` or a failed call fall back to the controller's own judgment, so dispatching never blocks.
 - Expensive configurations always need the user's approval.
 
 Details are in [`corral-dispatch-skill/README.md`](corral-dispatch-skill/README.md) (Chinese).

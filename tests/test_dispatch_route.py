@@ -1,4 +1,4 @@
-"""编排技能的路由脚本：只问几档和要不要交叉审查；结论怎么给、什么时候交回主控、调不通时不挡路（不联网，全部用假的返回）。"""
+"""编排技能的路由脚本：只问几档、要不要交叉审查和影响面；结论怎么给、什么时候交回主控、调不通时不挡路（不联网，全部用假的返回）。"""
 import importlib.util
 import io
 import json
@@ -16,11 +16,13 @@ route = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(route)
 
 
-def answers(tier=(0.0, 1.0, 0.0), tier_conf=0.9, nouls=(0.1, 0.1, 0.1, 0.1)):
+def answers(tier=(0.0, 1.0, 0.0), tier_conf=0.9, nouls=(0.1, 0.1, 0.1, 0.1), visible=0.1, doc_only=0.02):
     a = {"tier": {"type": "score", "score": 1.0, "probabilities": {str(i): p for i, p in enumerate(tier)},
                   "confidence": tier_conf}}
     for key, v in zip(route.CROSS_REVIEW, nouls):
         a["cross_" + key] = {"type": "noul", "noul": v}
+    a["visible"] = {"type": "noul", "noul": visible}
+    a["doc_only"] = {"type": "noul", "noul": doc_only}
     return {"model": route.MODEL, "answers": a, "usage": {"input_tokens": 700, "output_tokens": 100}}
 
 
@@ -41,11 +43,24 @@ class VerdictTest(unittest.TestCase):
         self.assertEqual(route.shape(answers(nouls=(0.2, 0.05, 0.1, 0.0)))["cross_review"]["verdict"], "不要")
         self.assertIsNone(route.shape(answers(nouls=(0.1, 0.5, 0.1, 0.1)))["cross_review"]["verdict"])
 
+    def test_impact_verdicts(self):
+        def impact(**kw):
+            return route.shape(answers(**kw))["impact"]["verdict"]
+        self.assertEqual(impact(nouls=(0.1, 0.9, 0.1, 0.1), visible=0.9), "碰要害")  # 碰要害压过看得见
+        self.assertEqual(impact(visible=0.85), "看得见")
+        self.assertEqual(impact(visible=0.1), "改行为")  # 不只影响显示，也不碰要害
+        self.assertIsNone(impact(visible=0.5))  # 新题拿不准
+        self.assertIsNone(impact(nouls=(0.1, 0.5, 0.1, 0.1), visible=0.1))  # 交叉审查拿不准
+        self.assertEqual(impact(visible=0.5, doc_only=0.95), "看得见")  # 只写方案、不改代码
+        self.assertIsNone(impact(visible=0.1, doc_only=0.5))  # 两题取较高的那个
+        self.assertEqual(route.shape(answers(visible=0.85))["impact"]["visible"], 0.85)
+
 
 class RequestTest(unittest.TestCase):
-    def test_asks_only_tier_and_cross_review(self):
+    def test_asks_only_tier_cross_review_and_visible(self):
         questions = route.build_request("x")["questions"]
-        self.assertEqual(sorted(questions), sorted(["tier"] + ["cross_" + k for k in route.CROSS_REVIEW]))
+        self.assertEqual(sorted(questions),
+                         sorted(["tier", "visible", "doc_only"] + ["cross_" + k for k in route.CROSS_REVIEW]))
 
     def test_pinned_model(self):
         self.assertEqual(route.build_request("x")["model"], "jev-1.13.0")
