@@ -3,6 +3,7 @@ import fcntl
 import itertools
 import json
 import os
+import re
 import select
 import subprocess
 import time
@@ -13,7 +14,8 @@ from corral.errors import EXIT_ERROR, EXIT_EXISTS, CorralError
 
 READY_TIMEOUT = 15.0
 STALE_FILES = ("sock", "meta.json", "exit.json", "cursor", "pen.log", "hook.py", "hook_pi.ts",
-               "hook_omp.ts")
+               "hook_omp.ts", "labels.json")
+LABEL_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 HOOK_PYTHON = agents.HOOK_PYTHON
 HOOK_DIR = os.path.dirname(os.path.abspath(__file__))  # 各适配器的钩子文件（hook.py、hook_pi.ts、hook_omp.ts）都在这里
 
@@ -117,11 +119,23 @@ def parse_env_pairs(pairs):
     return extra
 
 
-def start(name, cwd, argv, unique=False, env_pairs=(), prompt=None):
+def parse_label_pairs(pairs):
+    labels = {}
+    for pair in pairs:
+        key, sep, value = pair.partition("=")
+        if not sep or not LABEL_KEY_RE.match(key):
+            raise CorralError(EXIT_ERROR, "usage", f"--label expects KEY=VALUE with KEY of letters, digits, "
+                                                   f"'.', '_', '-' starting with a letter or digit, got {pair!r}")
+        labels[key] = value
+    return labels
+
+
+def start(name, cwd, argv, unique=False, env_pairs=(), prompt=None, label_pairs=()):
     cwd = os.path.abspath(cwd or os.getcwd())
     if not os.path.isdir(cwd):
         raise CorralError(EXIT_ERROR, "bad_cwd", f"no such directory: {cwd}", cwd=cwd)
     extra = parse_env_pairs(env_pairs)
+    labels = parse_label_pairs(label_pairs)
     paths.validate_name(name)
     adapter = agents.for_command(argv)
     if prompt is not None and adapter is None:
@@ -133,6 +147,8 @@ def start(name, cwd, argv, unique=False, env_pairs=(), prompt=None):
     clear_stale(d)
     hook_path = prepare_files(d, adapter)
     instance = uuid.uuid4().hex[:12]
+    # 标签由命令侧写、按实例编号认，栏位不碰它（DESIGN 13.5）
+    pen.write_private_json(os.path.join(d, "labels.json"), {"instance": instance, "labels": labels})
     agent_env, warnings = env.build(name, instance, os.path.join(d, "events"), paths.state_home(), extra)
     agent_argv = adapter.build(list(argv), hook_path, prompt) if adapter else list(argv)
     cfg = {"name": name, "instance": instance, "dir": d, "cwd": cwd, "argv": agent_argv,

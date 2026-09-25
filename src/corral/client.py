@@ -121,3 +121,10 @@ def wait_gone(name, timeout):
 
 def meta(name):
     return read_json_file(os.path.join(paths.pen_dir(name), "meta.json")) or {}
+
+
+def labels(name, instance):
+    """start --label 记下的标签；不是这个实例的（同名重开前留下的）不算。"""
+    saved = read_json_file(os.path.join(paths.pen_dir(name), "labels.json")) or {}
+    found = saved.get("labels") if saved.get("instance") == instance else None
+    return found if isinstance(found, dict) else {}

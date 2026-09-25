@@ -41,6 +41,7 @@ def build_parser():
     s.add_argument("--unique", action="store_true")
     s.add_argument("--prompt")
     s.add_argument("--env", action="append", default=[], metavar="KEY=VALUE")
+    s.add_argument("--label", action="append", default=[], metavar="KEY=VALUE")
 
     s = sub.add_parser("send")
     s.add_argument("name")
@@ -100,7 +101,7 @@ def emit(obj):
 
 def cmd_start(args, agent_command):
     emit(spawn.start(args.name, args.cwd, agent_command, unique=args.unique, env_pairs=args.env,
-                     prompt=args.prompt))
+                     prompt=args.prompt, label_pairs=args.label))
     return EXIT_OK
 
 
@@ -114,7 +115,8 @@ def agent_status(name):
               "last_event_at": None, "last_input_at": None, "last_input_source": None,
               "title": st["title"], "last_output": st["last_output"],
               "idle_for": None if st["last_output"] is None else round(now - st["last_output"], 3),
-              "attached": st["attached"], "last_human_input": st["last_human_input"], "started": st["started"]}
+              "attached": st["attached"], "last_human_input": st["last_human_input"], "started": st["started"],
+              "labels": client.labels(name, st["instance"])}
     if m.get("kind") in agents.ADAPTERS:
         snap = events.read(paths.pen_dir(name), st["instance"], m.get("cwd"))
         last_input = snap["inputs"][-1] if snap["inputs"] else None

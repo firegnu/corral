@@ -66,5 +66,5 @@ def list_agents():
             continue
         m = client.meta(name)
         agents.append({"name": name, "instance": st["instance"], "kind": m.get("kind"), "cwd": m.get("cwd"),
-                       "started": st["started"]})
+                       "started": st["started"], "labels": client.labels(name, st["instance"])})
     return agents

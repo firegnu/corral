@@ -143,8 +143,10 @@ echo "<摘要>" | python3 <本技能目录>/route.py
 - 名字用 AGENTS.md 规定的前缀，`--cwd` 指向它的 worktree，agent 命令后面带上这一档的参数。第一句话很短，只让它去读文件：
 
   ```sh
-  corral start demo/dev-backend --unique --cwd <worktree> --prompt "先读 AGENTS.md，再读 <任务文件>，照做。命令都在前台跑完，全部做完后，回复最后一行写 DONE。" -- codex --yolo -m gpt-6-astra -c 'model_reasoning_effort="high"'
+  corral start demo/dev-backend --unique --cwd <worktree> --label effort=high --label model=gpt-6-astra --prompt "先读 AGENTS.md，再读 <任务文件>，照做。命令都在前台跑完，全部做完后，回复最后一行写 DONE。" -- codex --yolo -m gpt-6-astra -c 'model_reasoning_effort="high"'
   ```
+
+- 用 `--label` 记下这一档的强度和模型：`effort=<medium / high / xhigh>`、`model=<模型名>`，和后面 agent 命令里的参数一致。看板靠它显示每个 agent 的档位；pi、omp 不分档，不带。
 
 - 被委派的 agent 一律免确认启动，中途不弹权限框，也不会被自动检查拦下。agent 命令按下表写，后面接上第 3 节的分档参数：
 

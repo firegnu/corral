@@ -34,13 +34,14 @@
 
 ### `corral start`
 
-- 用法：`corral start <名字> [--cwd 目录] [--unique] [--prompt 首句] [--env KEY=VALUE]… -- <agent 命令…>`
-- 选项：`--cwd` `--unique` `--prompt` `--env`
+- 用法：`corral start <名字> [--cwd 目录] [--unique] [--prompt 首句] [--env KEY=VALUE]… [--label KEY=VALUE]… -- <agent 命令…>`
+- 选项：`--cwd` `--unique` `--prompt` `--env` `--label`
 - 输出字段：`ok` `name` `instance` `kind` `warnings`
 - 拉起 agent，返回名字和实例编号（12 位十六进制）。同名 agent 已在跑时退出码 5。
 - `--unique`：把名字当前缀，自动补不重复的后缀，如 `demo/ask-3`；以输出里的 `name` 为准。
 - `--prompt`：第一句话，作为启动参数交给 agent，由 agent 自己提交。**新开的 agent 送第一句话只能用它**（Codex 在第一次提交前没有任何事件，`send` 会被拒绝）。只支持 Claude Code、Codex、pi 和 omp。
 - `--env KEY=VALUE`：给 agent 补充或覆盖环境变量（`CORRAL_*` 盖不掉）。
+- `--label KEY=VALUE`：给这个实例记一条标签，可重复，同一个键以最后一次为准。键由字母、数字、`.`、`_`、`-` 组成，以字母或数字开头；值是任意文字。corral 不解读标签，只在 `status`、`wait`、`ls` 的 `labels` 里原样返回。
 - `kind`：`claude`、`codex`、`pi`、`omp`，或不认识时的程序名。
 - 环境：agent 的环境取自用户的登录 shell（和用户新开终端时一致），调用方自己的环境不会传下去。取不到时退回最小环境，`warnings` 里说明。
 - 钩子：Claude Code 用 `--settings`、Codex 用 `-c`、pi 和 omp 用 `--extension` 加钩子，只对这一个 agent 生效，不写任何全局配置。Codex 同时带上 `--dangerously-bypass-hook-trust`：否则 Codex 启动时会要求人工审核这些钩子，点「信任」会把钩子写进用户的全局配置。
@@ -75,17 +76,18 @@
 
 - 用法：`corral status <名字>`
 - 选项：
-- 输出字段：`ok` `name` `instance` `kind` `proto` `state` `last_tool` `turn_started` `last_event` `last_event_at` `last_input_at` `last_input_source` `title` `last_output` `idle_for` `attached` `last_human_input` `started`
+- 输出字段：`ok` `name` `instance` `kind` `proto` `state` `last_tool` `turn_started` `last_event` `last_event_at` `last_input_at` `last_input_source` `title` `last_output` `idle_for` `attached` `last_human_input` `started` `labels`
 - `last_tool`：这一轮最近调用的工具名。`turn_started`：这一轮开始的时间。`last_event`：最近一个钩子事件名（只作参考，取值随 agent 版本变化）。
 - `title`：agent 设置的终端标题。`last_output`、`idle_for`：最后一次输出的时间、距今秒数。
 - `attached`：接入窗口数。`last_human_input`：接入窗口里最后一次人工操作的时间。`proto`：栏位协议版本。
+- `labels`：启动时 `--label` 给的标签，键值都是字符串；没给就是 `{}`。
 - 不存在 → 退出码 2，附 `exited`（agent 退出过时为 `{"instance", "code", "t", "stop_step"}`，否则 null）。
 
 ### `corral wait`
 
 - 用法：`corral wait <名字> [--timeout 秒] [--quiet 秒]`
 - 选项：`--timeout` `--quiet`
-- 输出字段：`ok` `name` `instance` `kind` `proto` `state` `last_tool` `turn_started` `last_event` `last_event_at` `last_input_at` `last_input_source` `title` `last_output` `idle_for` `attached` `last_human_input` `started` `result`
+- 输出字段：`ok` `name` `instance` `kind` `proto` `state` `last_tool` `turn_started` `last_event` `last_event_at` `last_input_at` `last_input_source` `title` `last_output` `idle_for` `attached` `last_human_input` `started` `labels` `result`
 - 等到这一轮结束：状态稳定在 `idle` 或 `blocked` 约 0.5 秒才返回（避免会话开始和输入事件先后到达时的瞬间误判）。输出 `status` 的全部字段加 `result`。
 - `--timeout` 默认 600 秒，超时退出码 4，附当前状态字段；状态是 `starting` 时说明启动没完成（可能卡在对话框里，接入去看）。
 - `--quiet N`：见「wait 结果值」里的 `stopped-quiet`。N 由调用方给，没有默认值。`blocked` 由事件先判出，不受影响。
@@ -109,7 +111,7 @@
 - 用法：`corral ls`
 - 选项：
 - 输出字段：`ok` `agents`
-- 每项字段：`name` `instance` `kind` `cwd` `started` `starting` `incompatible` `proto`
+- 每项字段：`name` `instance` `kind` `cwd` `started` `labels` `starting` `incompatible` `proto`
 - 列出所有活着的 agent，顺手清掉栏位已死的残留。正在启动的项只有 `name` 和 `starting: true`；协议版本不兼容的项只有 `name`、`incompatible: true`、`proto`。
 
 ### `corral read`
