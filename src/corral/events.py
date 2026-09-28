@@ -34,7 +34,7 @@ def fresh(instance):
             "main_session": None, "other_sessions": [],
             "pending": [], "state": "starting", "last_tool": None, "turn_started": None, "last_event": None,
             "last_event_t": None, "inputs": [], "input_count": 0, "last_prompt": None, "reply": None,
-            "reply_t": None}
+            "reply_t": None, "background_running": None}
 
 
 def _same_dir(a, b):
@@ -65,8 +65,15 @@ def _update(snap, e):
     elif ev == "Notification":
         if e.get("notification_type") == "permission_prompt":
             snap["state"] = "blocked"
+        elif (e.get("notification_type") == "idle_prompt" and snap["state"] == "working"
+              and snap.get("background_running") == 0):
+            # 回合结束后偶尔冒出一条不在对话里、没走完的工具调用，把状态翻回 working；
+            # agent 自己说在等输入、上一次回合结束时后台也没东西在跑，就认空闲
+            snap["state"] = "idle"
     elif ev in ("Stop", "StopFailure", "Interrupt"):
         snap["state"] = "idle"
+        if ev == "Stop":
+            snap["background_running"] = e.get("background_running")
         if ev == "Stop" and isinstance(e.get("last_assistant_message"), str):
             snap["reply"], snap["reply_t"] = e["last_assistant_message"], t
     elif ev == "SessionEnd":

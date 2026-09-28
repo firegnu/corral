@@ -38,6 +38,9 @@ def main():
         value = payload.get(key)
         if isinstance(value, (str, int, float, bool)):
             record[key] = value
+    tasks = payload.get("background_tasks")  # Claude Code 回合结束时列出还在后台跑的子 agent、命令
+    if isinstance(tasks, list):
+        record["background_running"] = sum(1 for x in tasks if isinstance(x, dict) and x.get("status") == "running")
     line = (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8")
     fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
     try:

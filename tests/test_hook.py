@@ -52,6 +52,20 @@ class HookTest(unittest.TestCase):
         self.assertNotIn("tool_response", line)
         self.assertNotIn("transcript_path", line)
 
+    def test_counts_running_background_tasks(self):
+        tasks = [{"id": "a", "type": "teammate", "status": "running"},
+                 {"id": "b", "type": "shell", "status": "running", "command": "sleep 45"},
+                 {"id": "c", "type": "shell", "status": "completed"}, "junk"]
+        for stdin, want in ((json.dumps({"background_tasks": tasks}), 2),
+                            (json.dumps({"background_tasks": []}), 0)):
+            proc = run_hook("Stop", stdin.encode(), self.env)
+            self.assertEqual((proc.returncode, proc.stdout), (0, b""))
+            self.assertEqual(self.lines()[-1]["background_running"], want)
+        run_hook("Stop", b'{"background_tasks": "x"}', self.env)
+        run_hook("Stop", b"{}", self.env)
+        self.assertNotIn("background_running", self.lines()[-2])
+        self.assertNotIn("background_running", self.lines()[-1])
+
     def test_malformed_input_still_exits_zero_silently(self):
         for stdin in (b"not json", b"", b"[1,2]", b"\xff\xfe"):
             with self.subTest(stdin=stdin):

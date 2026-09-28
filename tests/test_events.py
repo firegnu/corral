@@ -71,6 +71,38 @@ class StateMachineTest(EventsTestCase):
         self.append(self.start_main(), self.ev("Notification", notification_type="idle_prompt"))
         self.assertEqual(self.read()["state"], "idle")
 
+    def turn_then_stray_tool(self, **stop_fields):
+        """交活后又冒出一条没走完的工具调用（不在对话里），状态被翻回 working。"""
+        self.append(self.start_main(), self.ev("UserPromptSubmit", prompt="x"),
+                    self.ev("Stop", last_assistant_message="done", **stop_fields),
+                    self.ev("PreToolUse", tool_name="Bash"))
+        self.assertEqual(self.read()["state"], "working")
+
+    def test_idle_prompt_after_stray_tool_goes_idle_when_nothing_in_background(self):
+        self.turn_then_stray_tool(background_running=0)
+        self.append(self.ev("Notification", notification_type="idle_prompt"))
+        snap = self.read()
+        self.assertEqual(snap["state"], "idle")
+        self.assertEqual(snap["reply"], "done")
+
+    def test_idle_prompt_keeps_working_while_background_tasks_run(self):
+        self.turn_then_stray_tool(background_running=1)
+        self.append(self.ev("Notification", notification_type="idle_prompt"))
+        self.assertEqual(self.read()["state"], "working")
+
+    def test_idle_prompt_keeps_working_without_background_field(self):
+        # 旧钩子启动的 agent 不带这个字段：不知道后台有没有东西，照旧不改
+        self.turn_then_stray_tool()
+        self.append(self.ev("Notification", notification_type="idle_prompt"))
+        self.assertEqual(self.read()["state"], "working")
+
+    def test_idle_prompt_does_not_clear_blocked(self):
+        self.append(self.start_main(), self.ev("UserPromptSubmit", prompt="x"),
+                    self.ev("Stop", background_running=0),
+                    self.ev("PermissionRequest", tool_name="Bash"),
+                    self.ev("Notification", notification_type="idle_prompt"))
+        self.assertEqual(self.read()["state"], "blocked")
+
     def test_interrupt_event(self):
         self.append(self.start_main(), self.ev("UserPromptSubmit", prompt="x"), self.ev("Interrupt"))
         self.assertEqual(self.read()["state"], "idle")

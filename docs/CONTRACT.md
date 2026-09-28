@@ -21,7 +21,7 @@
 - 状态值：`starting` `idle` `working` `blocked` `exiting` `unknown`
   - `starting`：还没收到会话开始事件（启动中，或卡在信任框等对话框里；Codex 在第一次提交输入前一直是这个状态）；或者用 `--prompt` 启动、首句还没提交。
   - `idle`：这一轮结束。**只表示这一轮结束，不代表 agent 不会再动**：agent 可能自己开新一轮（例如后台命令结束后自己注入一条输入），看 `last_input_source`。
-  - `working`：收到输入、正在调用工具。
+  - `working`：收到输入、正在调用工具。Claude Code 回合结束后偶尔会冒出一条不在对话里的工具调用，让状态短暂显示 `working`；回合结束时后台没有在跑的任务的话，约 60 s 后随它的空闲提示回到 `idle`。
   - `blocked`：弹出了权限框或提问框，等人处理。
   - `exiting`：agent 报告会话结束，正在退出。
   - `unknown`：不认识的 agent（不是 Claude Code、Codex），没有钩子，状态无从得知。
