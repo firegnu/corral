@@ -182,3 +182,20 @@
 结论：用措辞 C，门槛和交叉审查一样三段：≥ 0.8 算看得见，≤ 0.2 算不是，中间交回主控（主控拿不准定改行为）。原摘要写法下它不会错判，只是拿不准多；摘要按新写法写，排版类显示活也能判出来。
 
 第四轮（2026-09-25）：真活验证时一件「只出交互方案」的活（选择、滚动、返回怎么设计），影响面题只给 0.62。试了三种改法，加上这件和一件新写法的真活共 32 件：把「只写设计方案」并进原题（D、E），方案类能判出，但排版类显示活掉到 0.27–0.76，新写法摘要下也只有 0.47–0.76，不能用；原题 C 不动、另加一道「只产出方案、调研或设计文档，不改程序代码吗」（F），两题取较高：原摘要 27/32（比只用 C 多对那件方案活，F 0.97），新写法 8 条全对；F 对排版、换色、修 bug 都给 0.02 左右，改行为的活最高 0.13，不添误报。接进 `route.py`（`doc_only`）。
+
+## 完工后仍显示 working（2026-09-28，Claude Code 2.1.283）
+
+现象：Claude Code 交活（Stop）后几秒，事件里又冒出一条 PreToolUse（Bash、AskUserQuestion 等），状态被翻回 working，之后再没有 Stop；约 60 s 后来的 `Notification idle_prompt` 目前不参与判状态，于是一直是 working，`send` 被拒。实际使用中一天约百次回合结束里有 4 次在 Stop 后冒出工具事件：2 次对得上后台子 agent 的会话记录（真在干活），2 次在主会话和子 agent 记录里都找不到（误判）。Codex 从没出现。
+
+试验：`spike/subagent/`（试验钩子记下钩子原始输入；启动脚本进程内给 Claude 多注册 SubagentStart / SubagentStop，再走 corral start）。隔离状态目录，sonnet，只放行 `sleep`、`echo` 和 Agent 工具，让它开一个后台子 agent 跑 sleep，自己立刻结束本轮。
+
+| 看到的 | 说明 |
+|---|---|
+| 子 agent 的工具事件带 `agent_id`、`agent_type` | 主 agent 自己的工具事件没有这两个字段，能分开 |
+| SubagentStart / SubagentStop 成对出现，SubagentStop 在主 agent 的 Stop 之后照样来 | 真子 agent 的 `agent_type` 非空 |
+| **每次 Stop 后 1–3 s 都有一条没有 SubagentStart 的 SubagentStop**，`agent_type` 为空，给出的记录文件路径事后不存在 | 回合结束后 Claude Code 在后台起了一个不留记录的隐藏 agent；同时输入框出现预测的下一句。误判那条工具事件的时间点（Stop 后约 3 s）和它吻合，**推测**是它偶尔发出工具调用；线上钩子不记 `agent_id`，还不能证实 |
+| Stop 的输入里有 `background_tasks`：列出还在跑的后台子 agent、后台命令及状态 | 回合结束时有没有东西在后台跑，Claude Code 直接告诉了 |
+| 子 agent 结束后主 agent 自己开新一轮：没有 UserPromptSubmit，直接 Stop | 「Stop 之后没有新输入的工具事件一律不算」不可行，会漏掉这种自己开的轮次 |
+| `idle_prompt` 在最后一次 Stop 后 60.1 s 到 | 和线上 35 条一致 |
+
+没覆盖到：误判那条工具事件本身带不带 `agent_id`（无法人为复现）。
